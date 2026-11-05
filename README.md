@@ -74,10 +74,10 @@ Sessions use random HttpOnly, SameSite=Strict cookies (Secure in production), ex
 
 ## Reporting rules
 
-- Billed value: approved invoice totals, selected by invoice date.
-- Collections: positive payments minus negative correction entries, selected by transaction date.
-- Unpaid bill value: full invoice totals for approved unpaid bills, regardless of the date range.
-- Pending approvals: submitted monetary invoices not yet approved, across all dates; supporting warranty/AMC notes without monetary totals stay in the archive.
+- Admin Overview shows three clickable counts across all dates, optionally filtered by uploading advisor.
+- Total paid bills: submitted invoices currently paid in full, with their total invoice amount underneath. Each bill counts once; reversals move it back to unpaid.
+- Total unpaid bills: all submitted invoices not currently paid in full, including those awaiting approval, with their total invoice amount underneath.
+- Awaiting approval: the subset of unpaid invoices not yet approved by the cashier. Drafts and supporting warranty/AMC notes are excluded from all three counts. Unread amounts are counted as unpaid bills but excluded from monetary totals and flagged.
 - INR is stored in integer paise. Dates are displayed and grouped in Asia/Kolkata.
 - Every clickable metric uses the same snapshot and filters as its underlying rows. Search filters the displayed rows only and is labelled accordingly.
 - Reversing an incorrect payment requires a super admin and a reason. The original payment remains. The negative correction belongs to the reversal date. This is not a refund or credit note.

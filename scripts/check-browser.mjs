@@ -78,11 +78,28 @@ try {
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
   await login("admin01","AdminDemo!2026");
   await page.getByRole("button",{name:"Overview",exact:true}).click();
-  await page.locator(".sd-metric").filter({hasText:"Collected in full"}).click();
+  assert.equal(await page.locator(".sd-metric").count(), 3);
+  assert.deepEqual(await page.locator(".sd-metric > strong").allTextContents(), ["1", "3", "3"]);
+  assert.doesNotMatch(await page.locator("main").innerText(), /Service bill value|Service value by customer|Collection trend/);
+  await page.locator(".sd-metric").filter({hasText:"Total unpaid bills"}).click();
+  assert.equal(await page.locator(".sd-invoice").count(), 3);
+  await page.getByRole("button", {name: /^Awaiting approval/}).click();
+  assert.equal(await page.locator(".sd-invoice").count(), 3);
+  await page.locator(".sd-metric").filter({hasText:"Total paid bills"}).click();
+  assert.equal(await page.locator(".sd-invoice").count(), 1);
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({width,height:900});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    await page.screenshot({path:`/tmp/desk-admin-status-${width}.png`,fullPage:true});
+  }
   await page.getByRole("button",{name:"TXA24-23030",exact:true}).click();
   await page.getByRole("button",{name:"Reverse entry",exact:true}).click();
   await page.getByText("Test correction",{exact:true}).first().waitFor();
   await page.getByRole("button",{name:"Close bill details"}).click();
+  assert.deepEqual(await page.locator(".sd-metric > strong").allTextContents(), ["0", "4", "3"]);
+  assert.equal(await page.locator(".sd-invoice").count(), 0);
+  await page.locator(".sd-metric").filter({hasText:"Total unpaid bills"}).click();
+  assert.equal(await page.locator(".sd-invoice").count(), 4);
   await page.getByRole("button",{name:/Bill archive/}).click();
   await page.getByRole("button",{name:"ACA/26-27/1145",exact:true}).click();
   assert.match(await page.locator(".sd-related").innerText(),/1 bill/);

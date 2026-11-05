@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync, existsSync } from "node:fs";
 import { paise, financialFields } from "./pdf/financial";
 import { extractBills, extractCustomerReference } from "./pdf/extract";
-import { balance, cashierDailyReport, customerKey, groupCustomers, report } from "./desk";
+import { balance, cashierDailyReport, customerKey, groupCustomers, indiaDate, report } from "./desk";
 import { freshDemo, demoAction, upgradeDemo } from "./desk-demo";
 import { fixtureSnapshot } from "./test-fixtures";
 import { importReferenceBills } from "./import-reference-bills";
@@ -47,20 +47,45 @@ test("full bill settlement, retries, reversal and drill-down reconcile", () => {
   data = demoAction(data,admin,"reverse",payment.id,"Repeated request");
   assert.equal(data.payments.length,count+1);
   assert.equal(balance(data.bills[0],data.payments),2000000);
-  const summary = report(data,"","");
-  assert.equal(summary.totals.collections,summary.payments.reduce((s,p)=>s+p.amount_paise,0));
-  assert.equal(summary.totals.billed,summary.billed.reduce((s,b)=>s+b.amount_paise!,0));
+  const summary = report(data);
+  assert.deepEqual(summary.paid.map(b => b.id), ["sample-1"]);
+  assert.deepEqual(summary.unpaid.map(b => b.id), ["sample-0", "sample-2", "sample-3", "sample-4", "sample-5"]);
+  assert.equal(summary.paidAmount, 4130500);
+  assert.equal(summary.unpaidAmount, 9789200);
   assert.equal(summary.pending.length,2);
-  const dated = report(data,"2000-01-01","2000-01-02");
-  assert.equal(dated.totals.billed,0); assert.equal(dated.totals.collections,0);
-  assert.equal(dated.totals.outstanding,summary.totals.outstanding);
+  data = demoAction(data,cashier,"collect","sample-0");
+  assert.equal(report(data).paid.length, 2, "Repaid bills count once despite multiple payment entries");
+  assert.equal(report(data).unpaid.length, 4);
 });
-test("India midnight and negative reversal dates are reported on the correct day", () => {
+test("admin bill totals cover all dates, exclude drafts and notes, and respect advisor and payment status", () => {
   const data = fixtureSnapshot();
-  data.payments = [{ ...data.payments[0], occurred_at:"2026-11-03T18:30:00Z",amount_paise:2000000 },
-    { ...data.payments[0], id:"reversal", occurred_at:"2026-11-04T18:30:00Z",amount_paise:-2000000,source:"reversal" }];
-  assert.equal(report(data,"2026-11-04","2026-11-04").totals.collections,2000000);
-  assert.equal(report(data,"2026-11-05","2026-11-05").totals.collections,-2000000);
+  data.bills[0].invoice_date = "2000-01-01";
+  data.bills[5].amount_paise = null;
+  const bill = data.bills[4];
+  data.bills.push(
+    { ...bill, id: "missing-date", invoice_date: null, uploaded_by: "other-advisor" },
+    { ...bill, id: "draft", uploads: { original_filename: "draft.pdf", confirmed_at: null } },
+    { ...bill, id: "note", amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "warranty_note", billType: "Warranty", billedTo: "", typeEvidence: "" } } },
+  );
+  data.payments.push({ ...data.payments[0], id: "archived", bill_id: data.bills[2].id, amount_paise: data.bills[2].amount_paise!, is_archived: true });
+  const summary = report(data);
+  assert.equal(summary.paid.length, 2);
+  assert.equal(summary.unpaid.length, 5);
+  assert.equal(summary.pending.length, 3);
+  assert.equal(summary.paidAmount, 6130500);
+  assert.equal(summary.unpaidAmount, 10914400);
+  assert.equal(summary.unreadAmounts, 1);
+  assert.ok(summary.pending.every(b => summary.unpaid.includes(b)));
+  const filtered = report(data, "other-advisor");
+  assert.deepEqual(filtered.paid, []);
+  assert.deepEqual(filtered.unpaid.map(b => b.id), ["missing-date"]);
+  assert.equal(filtered.pending.length, 1);
+  assert.equal(filtered.unpaidAmount, bill.amount_paise);
+  assert.equal(report(data, "no-advisor").unpaid.length, 0);
+});
+test("India midnight is reported on the correct day", () => {
+  assert.equal(indiaDate("2026-11-03T18:29:59Z"), "2026-11-03");
+  assert.equal(indiaDate("2026-11-03T18:30:00Z"), "2026-11-04");
 });
 test("cashier daily analytics includes pending invoices and tracks their current payment status", () => {
   let data = fixtureSnapshot();

@@ -23,7 +23,7 @@ export type Payment = { id: string; bill_id: string; amount_paise: number; metho
 export type Audit = { id: string; bill_id: string | null; actor_id: string; action: string; created_at: string; detail: Record<string, unknown> };
 export type DraftUpload = { id: string; original_filename: string; status: string; processing_error: string | null; bills: DeskBill[] };
 export type Snapshot = { drafts?: DraftUpload[]; bills: DeskBill[]; payments: Payment[]; staff: Staff[]; audit: Audit[]; as_of: string; schema_version?: number };
-export type Metric = "billed" | "collections" | "outstanding" | "pending";
+export type Metric = "paid" | "unpaid" | "pending";
 export const money = (paise: number | null) => paise === null ? "Not extracted" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(paise / 100);
 export const billType = (bill: DeskBill) => bill.field_confidence?.document?.billType || bill.bill_type || "Type not identified";
 export const isSupportingNote = (bill: DeskBill) => bill.amount_paise === null
@@ -56,21 +56,14 @@ export function groupCustomers(bills: DeskBill[]) {
   }
   return [...groups.values()];
 }
-export function report(snapshot: Snapshot, from: string, to: string, staffId = "") {
-  const inRange = (date: string) => (!from || date >= from) && (!to || date <= to);
-  const bills = snapshot.bills.filter(b => b.uploads?.confirmed_at && (!staffId || b.uploaded_by === staffId));
-  const approved = bills.filter(b => b.approval_status === "approved");
-  const billed = approved.filter(b => b.invoice_date && inRange(b.invoice_date));
-  const ids = new Set(approved.map(b => b.id));
-  const payments = snapshot.payments.filter(p => !p.is_archived && ids.has(p.bill_id) && inRange(indiaDate(p.occurred_at)));
-  const outstanding = approved.filter(b => !isPaid(b, snapshot.payments));
-  const pending = bills.filter(b => b.approval_status !== "approved" && !isSupportingNote(b));
-  return { billed, payments, outstanding, pending, totals: {
-    billed: billed.reduce((sum, b) => sum + (b.amount_paise ?? 0), 0),
-    collections: payments.reduce((sum, p) => sum + p.amount_paise, 0),
-    outstanding: outstanding.reduce((sum, b) => sum + (b.amount_paise ?? 0), 0),
-    pending: pending.length,
-  } };
+export function report(snapshot: Snapshot, staffId = "") {
+  const bills = snapshot.bills.filter(b => b.uploads?.confirmed_at && !isSupportingNote(b) && (!staffId || b.uploaded_by === staffId));
+  const paid = bills.filter(b => isPaid(b, snapshot.payments));
+  const unpaid = bills.filter(b => !isPaid(b, snapshot.payments));
+  const pending = unpaid.filter(b => b.approval_status !== "approved");
+  const total = (rows: DeskBill[]) => rows.reduce((sum, b) => sum + (b.amount_paise ?? 0), 0);
+  return { paid, unpaid, pending, paidAmount: total(paid), unpaidAmount: total(unpaid),
+    unreadAmounts: unpaid.filter(b => b.amount_paise === null).length };
 }
 
 export function cashierView(bill: DeskBill, payments: Payment[]) {

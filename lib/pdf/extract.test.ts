@@ -90,9 +90,9 @@ test("Shared owner IDs link service and coverage documents without grouping prov
   assert.equal(bills.filter(isSupportingNote).length, 4);
   const conflictingNote = { ...warranty.bills.find(isSupportingNote)!, amount_evidence: "Grand Total 100 · Grand Total 200", extraction_issues: ["Conflicting invoice totals. Upload a corrected PDF."] };
   assert.equal(isSupportingNote(conflictingNote), false, "Conflicting numeric totals still require review");
-  const summary = report({ ...freshDemo(), bills }, "", "");
+  const summary = report({ ...freshDemo(), bills });
   assert.equal(summary.pending.length, 8);
-  assert.equal(summary.totals.billed, 0, "Import does not approve invoices");
-  assert.equal(summary.totals.collections, 0, "Import does not invent payments");
+  assert.equal(summary.unpaid.length, 8, "Imported invoices await payment");
+  assert.equal(summary.paidAmount, 0, "Import does not invent payments");
   assert.equal(bills.reduce((sum,b) => sum + (b.amount_paise ?? 0),0), 35912100);
 });
