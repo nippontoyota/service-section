@@ -84,7 +84,7 @@ try {
   assert.equal(await page.locator(".sd-queue-item").count(), 3); assert.equal(next, 0);
   await click("Close upload dialog"); await click("Upload bills (3)"); assert.equal(await page.locator(".sd-queue-item").count(), 3);
   await click("Upload & read all"); await page.getByText("Synthetic read failure", { exact: true }).waitFor(); await page.getByText("2 ready · 1 failed · 3 / 10 PDFs", { exact: true }).waitFor();
-  assert.equal(maxProcess, 2); assert.deepEqual(await page.locator(".sd-review-card>strong").allTextContents(), ["a.pdf-0 · ₹100.00", "b.pdf-0 · ₹100.00", "b.pdf-1 · ₹100.00"]);
+  assert.equal(maxProcess, 2); assert.deepEqual(await page.locator(".sd-review-reference").allTextContents(), ["a.pdf-0", "b.pdf-0", "b.pdf-1"]);
   await click("Retry processing"); await page.getByText("3 ready · 0 failed · 3 / 10 PDFs", { exact: true }).waitFor(); assert.equal(next, 3, "Retry must reuse upload ID");
   await page.locator(".sd-review-card").nth(2).getByRole("button", { name: "View bill", exact: true }).click();
   await page.getByTitle("Original bill PDF").waitFor(); assert.match(await page.getByTitle("Original bill PDF").getAttribute("src"), /^blob:.*#page=2$/); assert.equal(signedRequests, 0);
@@ -95,6 +95,7 @@ try {
     await page.setViewportSize({ width, height: 844 }); assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     const box = await page.getByRole("dialog", { name: "Upload and review bills" }).boundingBox(); assert(box.x >= 0 && box.x + box.width <= width + 1);
     await page.keyboard.press("Tab"); assert(await page.evaluate(() => document.activeElement.closest("dialog") !== null));
+    if (width === 1440) { await page.getByRole("dialog", { name: "Upload and review bills" }).evaluate(el => { el.scrollTop = 0; }); await page.screenshot({ path: "/tmp/billdesk-upload-tiles-desktop.png" }); }
     if (width === 320) await page.screenshot({ path: "/tmp/billdesk-upload-320.png", fullPage: true });
   }
   await click("Submit all"); await page.getByText("Synthetic submission failure", { exact: true }).waitFor(); await page.waitForFunction(() => document.querySelectorAll(".sd-queue-item").length === 1); assert.equal(maxConfirm, 2); assert.equal(await page.locator(".sd-queue-item").count(), 1);

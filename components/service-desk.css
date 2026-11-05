@@ -272,16 +272,45 @@
 }
 
 .sd-upload-launch{margin-bottom:24px}
-.sd-upload-dialog>h2{padding-right:36px}
+.sd-upload-dialog{width:min(1120px,calc(100% - 48px))}
+.sd-upload-heading{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-right:30px}
+.sd-upload-heading>div{min-width:0}
+.sd-upload-heading h2{margin-bottom:6px}
+.sd-upload-heading p{font-size:13px;color:var(--sd-muted);margin:0}
+.sd-upload-heading .sd-upload-button{flex-shrink:0}
+.sd-upload-summary{font-size:12px;color:var(--sd-muted);padding:14px 0;margin:14px 0 0;border-top:1px solid var(--sd-line)}
+.sd-upload-dialog .sd-upload-queue{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
 .sd-upload-dialog progress{width:100%;height:7px;accent-color:var(--sd-accent)}
 .sd-upload-dialog .sd-upload-button{width:fit-content}
-.sd-upload-dialog .sd-upload-file{align-items:flex-start}
+.sd-upload-dialog .sd-upload-file{align-items:flex-start;padding:0 0 12px;gap:10px}
+.sd-upload-file>svg{flex-shrink:0;color:var(--sd-accent-ink);margin-top:2px}
 .sd-upload-file small{display:block;margin-top:6px}
-.sd-review-card{padding:16px;background:var(--sd-subtle);border:1px solid var(--sd-line);border-radius:8px;margin-top:12px}
-.sd-review-card .sd-actions{margin-top:12px}
-.sd-queue-item{padding:12px 0;border-bottom:1px solid var(--sd-line);min-width:0}
+.sd-review-card{padding:16px 0 0;min-width:0}
+.sd-review-card+.sd-review-card{border-top:1px solid var(--sd-line);margin-top:16px}
+.sd-review-meta{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.sd-review-meta>small{flex-shrink:0;background:var(--sd-subtle);padding:2px 7px;border-radius:4px;font-size:10px}
+.sd-review-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.sd-review-heading>div{min-width:0}
+.sd-review-heading h3{font-size:16px;margin:3px 0 0;letter-spacing:-.02em}
+.sd-review-amount{text-align:right;max-width:55%}
+.sd-review-amount strong{display:block;font-family:"SFMono-Regular",Consolas,monospace;font-size:19px;letter-spacing:-.5px;font-variant-numeric:tabular-nums;line-height:1.4;margin-top:2px}
+.sd-review-customer{margin:16px 0 12px}
+.sd-review-customer strong{display:block;font-size:13px;line-height:1.5;margin-top:2px}
+.sd-review-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0;padding:12px;background:var(--sd-subtle);border-radius:6px}
+.sd-review-fields>div{min-width:0}
+.sd-review-fields dt{font-size:11px;color:var(--sd-muted)}
+.sd-review-fields dd{margin:4px 0 0;font-size:12px;font-weight:600;overflow-wrap:anywhere}
+.sd-review-evidence{margin-top:10px;font-size:11px!important}
+.sd-review-card .sd-actions{margin-top:16px;padding-top:14px;border-top:1px solid var(--sd-line)}
+.sd-review-card .sd-actions button:first-child{background:var(--sd-accent-wash);border-color:transparent;color:var(--sd-accent-ink)}
+.sd-queue-item{padding:18px;border:1px solid var(--sd-line);border-radius:12px;min-width:0;background:white;box-shadow:0 2px 4px #20212404}
+.sd-queue-item.has-error{border-color:#e6c58d}
+.sd-queue-item>.sd-actions:empty{display:none}
 .sd-upload-footer{position:sticky;bottom:-35px;background:white;padding:16px 0;margin-top:12px;border-top:1px solid var(--sd-line)}
 .sd-placeholder{height:100px;margin:24px 0;border-radius:12px;background:var(--sd-line);opacity:.5}
 .sd-placeholder-large{height:320px}
 @media(max-width:760px){.sd-upload-dialog{width:100%;max-width:100%;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0;padding:24px 16px}.sd-upload-footer{bottom:-24px}.sd-upload-footer button{flex:1;min-height:44px}.sd-upload-dialog .sd-actions{gap:8px}.sd-upload-dialog .sd-upload-button{min-height:44px}}
 .sd-dialog{overscroll-behavior:contain}
+
+@media(max-width:900px){.sd-upload-dialog .sd-upload-queue{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){.sd-upload-heading{flex-wrap:wrap;gap:14px}.sd-queue-item{padding:14px}.sd-review-amount strong{font-size:17px}.sd-review-heading{gap:10px}.sd-upload-summary{margin-top:14px}}

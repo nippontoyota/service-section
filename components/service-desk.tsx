@@ -478,19 +478,28 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       </>}
     </main>
     {uploadOpen && <UploadDialog onClose={() => setUploadOpen(false)}>
-      <h2>Upload bills</h2><p>Add up to 10 PDFs, 10 MB each. Review the extracted bills before submitting.</p>
-      <label className="sd-upload-button"><Upload size={20}/>Add PDFs<input aria-label="Add PDFs" type="file" accept=".pdf,application/pdf" multiple disabled={batchBusy || busy} onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }}/></label>
-      <p role="status">{files.filter(f => f.state === "ready").length} ready · {files.filter(f => f.error).length} failed · {files.length} / 10 PDFs</p>
-      <div className="sd-upload-queue">{files.map(f => <section className="sd-queue-item" key={f.id}>
-        <div className="sd-upload-file"><span><strong>{f.name}</strong><small>{({ selected: "Ready to upload", uploading: "Uploading…", reading: "Reading bill details…", ready: "Ready for review", failed: "Failed", submitting: "Submitting…" })[f.state]}</small></span><button disabled={batchBusy || busy} aria-label={"Remove " + f.name} onClick={() => void removeFile(f)}><X size={16}/></button></div>
-        <progress aria-label={"Progress for " + f.name} max={100} value={f.progress}/>
+      <header className="sd-upload-heading"><div><h2>Upload bills</h2><p>Review each bill, then submit to the cashier. Up to 10 PDFs · 10 MB each.</p></div>
+        <label className="sd-upload-button"><Upload size={20}/>Add PDFs<input aria-label="Add PDFs" type="file" accept=".pdf,application/pdf" multiple disabled={batchBusy || busy} onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }}/></label>
+      </header>
+      <p className="sd-upload-summary" role="status">{files.filter(f => f.state === "ready").length} ready · {files.filter(f => f.error).length} failed · {files.length} / 10 PDFs</p>
+      <div className="sd-upload-queue">{files.map(f => <section className={"sd-queue-item" + (f.error ? " has-error" : "")} key={f.id}>
+        <div className="sd-upload-file"><FileText size={19} aria-hidden="true"/><span><strong>{f.name}</strong><small>{({ selected: "Ready to upload", uploading: "Uploading…", reading: "Reading bill details…", ready: "Ready for review", failed: "Failed", submitting: "Submitting…" })[f.state]}</small></span><button disabled={batchBusy || busy} aria-label={"Remove " + f.name} onClick={() => void removeFile(f)}><X size={16}/></button></div>
+        {(f.state === "uploading" || f.state === "reading") && <progress aria-label={"Progress for " + f.name} max={100} value={f.progress}/>}
         {f.error && <p className="sd-warning" role="alert">{f.error}</p>}
         <div className="sd-actions">
           {f.localUrl && !f.bills.length && <a href={f.localUrl + "#page=1"} target="_blank" rel="noreferrer">View PDF</a>}
           {f.state === "failed" && !f.file && <label className="sd-upload-button">Reselect PDF<input aria-label={"Reselect " + f.name} type="file" accept=".pdf,application/pdf" disabled={batchBusy || busy} onChange={e => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; const result = selectFiles([], [file]); if (result.errors.length) { setNotice(result.errors.join(" ")); return; } if (file.name !== f.name) { setNotice("Select the original file with the same name."); return; } const localUrl = URL.createObjectURL(file); localUrls.current.set(f.id, localUrl); updateFile(f.id, { file, localUrl, stored: false, identity: fileIdentity(file), state: "selected", error: undefined }); }}/></label>}
           {f.error && (f.file || f.stored || f.bills.length > 0) && <button disabled={batchBusy || busy} onClick={() => void (f.bills.length ? submit(f) : uploadFiles(f))}>Retry {f.bills.length ? "submission" : "processing"}</button>}
         </div>
-        {f.bills.map(b => <article className="sd-review-card" key={b.id}><small>{f.name} · Pages {b.page_from}–{b.page_to}</small><span className="sd-bill-type">{billType(b)}</span><strong>{b.invoice_reference || "Invoice number not read"} · {billAmount(b)}</strong><p>{b.customer_name || "Customer not read"} · {b.vehicle_no_display || "Vehicle not read"} · {b.invoice_date || "Date not read"}</p><small>{b.amount_evidence}</small>{b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}<div className="sd-actions"><button onClick={() => { setSelectedId(b.id); void openPdf(b); }}><Eye size={16}/>View bill</button><button className="sd-danger" disabled={batchBusy || busy} onClick={() => void deleteBill(b)}><Trash2 size={16}/>Delete draft</button></div></article>)}
+        {f.bills.map(b => <article className="sd-review-card" key={b.id}>
+          <div className="sd-review-meta"><span className="sd-bill-type">{billType(b)}</span><small>Pages {b.page_from}–{b.page_to}</small></div>
+          <div className="sd-review-heading"><div><small>Invoice</small><h3 className="sd-review-reference">{b.invoice_reference || "Invoice number not read"}</h3></div><div className="sd-review-amount"><small>Bill amount</small><strong>{billAmount(b)}</strong></div></div>
+          <div className="sd-review-customer"><small>Customer</small><strong>{b.customer_name || "Customer not read"}</strong></div>
+          <dl className="sd-review-fields"><div><dt>Vehicle</dt><dd>{b.vehicle_no_display || "Vehicle not read"}</dd></div><div><dt>Invoice date</dt><dd>{b.invoice_date || "Date not read"}</dd></div></dl>
+          <small className="sd-review-evidence">{b.amount_evidence}</small>
+          {b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
+          <div className="sd-actions"><button onClick={() => { setSelectedId(b.id); void openPdf(b); }}><Eye size={16}/>View bill</button><button className="sd-danger" disabled={batchBusy || busy} onClick={() => void deleteBill(b)}><Trash2 size={16}/>Delete draft</button></div>
+        </article>)}
       </section>)}</div>
       {!files.length && <p>No PDFs selected. Uploaded drafts are restored here after a reload.</p>}
       <div className="sd-actions sd-upload-footer"><button className="sd-secondary" disabled={batchBusy || busy || !files.some(f => !f.bills.length && (f.state === "selected" || f.state === "failed") && (f.file || f.stored))} onClick={() => void uploadFiles()}>Upload &amp; read all</button><button className="sd-primary" disabled={batchBusy || busy || !files.some(f => f.state === "ready")} onClick={() => void submit()}>Submit all</button></div>
