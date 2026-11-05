@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { extractBills, extractedBillFields } from "@/lib/pdf/extract";
 import { requireRole } from "@/lib/supabase-server";
 
+export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {

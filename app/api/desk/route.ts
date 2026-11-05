@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { AuthenticationError, requireStaff, startSession } from "@/lib/supabase-server";
 import { hashPassword } from "@/lib/password";
 import { extractBills, extractedBillFields } from "@/lib/pdf/extract";
+export const runtime = "nodejs";
+export const maxDuration = 60;
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "Cache-Control": "no-store" } });
 export async function GET(request: Request) {
   try {

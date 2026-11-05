@@ -4,6 +4,8 @@ Think before you print.
 
 A staff-ID login for advisors, cashiers and super admins. Advisors upload digital PDFs; service amounts, dates and customer identifiers are extracted automatically. Cashiers approve bills and mark their full invoice amounts paid. Admins inspect customer-grouped bills, full collections, unpaid invoices, original PDFs and an audited history.
 
+For Vercel setup, environment variables and database prerequisites, see [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Local demo
 
 Run npm install, then npm run dev. In .env.local, set SERVICE_DESK_DEMO=true with no Supabase credentials. Demo mode is development-only and cannot run in a production build.

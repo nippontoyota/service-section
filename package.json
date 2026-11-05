@@ -2,11 +2,15 @@
   "name": "cashier-bill-finder",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev --webpack --hostname 0.0.0.0",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
+    "check:deployment": "node scripts/check-vercel-bundle.mjs",
     "test": "tsc lib/pdf/extract.test.ts lib/bill-utils.test.ts lib/finance.test.ts lib/password.test.ts lib/request-security.test.ts --outDir /tmp/cashier-bill-tests --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck && NODE_PATH=./node_modules node --test /tmp/cashier-bill-tests/pdf/extract.test.js /tmp/cashier-bill-tests/bill-utils.test.js /tmp/cashier-bill-tests/finance.test.js /tmp/cashier-bill-tests/password.test.js /tmp/cashier-bill-tests/request-security.test.js",
     "bootstrap:staff": "node --env-file=.env.local scripts/bootstrap-staff.mjs"
   },
