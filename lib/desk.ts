@@ -21,7 +21,8 @@ export type DeskBill = {
 };
 export type Payment = { id: string; bill_id: string; amount_paise: number; method: string; occurred_at: string; recorded_at: string; recorded_by: string; source: string; reversal_of: string | null; reason: string | null; is_archived?: boolean };
 export type Audit = { id: string; bill_id: string | null; actor_id: string; action: string; created_at: string; detail: Record<string, unknown> };
-export type Snapshot = { bills: DeskBill[]; payments: Payment[]; staff: Staff[]; audit: Audit[]; as_of: string; schema_version?: number };
+export type DraftUpload = { id: string; original_filename: string; status: string; processing_error: string | null; bills: DeskBill[] };
+export type Snapshot = { drafts?: DraftUpload[]; bills: DeskBill[]; payments: Payment[]; staff: Staff[]; audit: Audit[]; as_of: string; schema_version?: number };
 export type Metric = "billed" | "collections" | "outstanding" | "pending";
 export const money = (paise: number | null) => paise === null ? "Not extracted" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(paise / 100);
 export const billType = (bill: DeskBill) => bill.field_confidence?.document?.billType || bill.bill_type || "Type not identified";
@@ -70,4 +71,10 @@ export function report(snapshot: Snapshot, from: string, to: string, staffId = "
     outstanding: outstanding.reduce((sum, b) => sum + (b.amount_paise ?? 0), 0),
     pending: pending.length,
   } };
+}
+
+export function cashierView(bill: DeskBill, payments: Payment[]) {
+  if (!bill.uploads?.confirmed_at) return null;
+  if (isSupportingNote(bill) || isPaid(bill, payments)) return "archive";
+  return bill.approval_status === "approved" ? "unpaid" : "incoming";
 }

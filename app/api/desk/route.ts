@@ -2,22 +2,19 @@ import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { AuthenticationError, requireStaff, startSession } from "@/lib/supabase-server";
 import { hashPassword } from "@/lib/password";
-import { extractBills, extractedBillFields } from "@/lib/pdf/extract";
+import { loadDesk } from "@/lib/desk-session";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "Cache-Control": "no-store" } });
 export async function GET(request: Request) {
   try {
-    const { profile, service } = await requireStaff(request, true);
-    if (profile.must_change_password) return json({ profile });
-    const { data, error } = await service.rpc("app_desk_snapshot", { staff: profile.id });
-    if (error) throw error;
-    return json({ profile, snapshot: data });
-  } catch (e) { return json({ error: e instanceof Error ? e.message : "Could not load workspace" }, e instanceof AuthenticationError ? 401 : 403); }
+    return json(await loadDesk(request));
+  } catch (e) { return json({ error: e instanceof Error ? e.message : "Could not load workspace" }, e instanceof AuthenticationError ? 401 : 503); }
 }
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+    const authStart = performance.now();
     const { service, profile, user } = await requireStaff(request, body.action === "password");
     if (body.action === "password") {
       if (typeof body.password !== "string" || body.password.length < 12 || body.password.length > 128) throw new Error("Use a password between 12 and 128 characters");
@@ -40,6 +37,7 @@ export async function POST(request: Request) {
       if (!upload) throw new Error("Original upload not found");
       const { data: file, error } = await service.storage.from("bills").download(upload.storage_path);
       if (error || !file) throw new Error("Original PDF could not be loaded");
+      const { extractBills, extractedBillFields } = await import("@/lib/pdf/extract");
       const result = await extractBills(new Uint8Array(await file.arrayBuffer()));
       const extracted = result.bills.find(b => b.pageFrom === bill.page_from && b.pageTo === bill.page_to);
       if (!extracted) throw new Error("Historical page ranges do not match this invoice. Upload the corrected PDF for review.");
@@ -50,15 +48,21 @@ export async function POST(request: Request) {
       const { error: auditError } = await service.from("audit_events").insert({actor_id:user.id,bill_id:bill.id,action:"reextracted",detail:{previous_amount:bill.amount_paise,amount:extracted.amountPaise}});
       if (auditError) throw auditError;
     } else if (body.action === "pdf") {
-      const { data: bill, error } = await service.from("bills").select("upload_id,uploaded_by").eq("id", body.target).single();
+      const { data: bill, error } = await service.from("bills")
+        .select("upload_id,uploaded_by,uploads!inner(storage_path,confirmed_at)").eq("id", body.target).single();
       if (error || !bill) throw new Error("Bill not accessible");
       if (profile.role === "service_advisor" && bill.uploaded_by !== user.id) throw new Error("Bill not accessible");
-      const { data: upload } = await service.from("uploads").select("storage_path,confirmed_at").eq("id", bill.upload_id).single();
-      if (!upload) throw new Error("PDF not accessible");
+      const upload = bill.uploads as unknown as { storage_path: string; confirmed_at: string | null };
       if (profile.role === "cashier" && !upload.confirmed_at) throw new Error("PDF not accessible");
+      const authorization = performance.now() - authStart;
+      const signingStart = performance.now();
+      const expiresAt = Date.now() + 300_000;
       const { data, error: signedError } = await service.storage.from("bills").createSignedUrl(upload.storage_path, 300);
       if (signedError) throw signedError;
-      return json({ url: data.signedUrl });
+      const signing = performance.now() - signingStart;
+      const response = json({ url: data.signedUrl, uploadId: bill.upload_id, expiresAt, timings: { authorization, signing } });
+      response.headers.set("Server-Timing", `authorization;dur=${authorization.toFixed(1)}, signing;dur=${signing.toFixed(1)}`);
+      return response;
     } else if (["create_staff", "reset_staff", "toggle_staff"].includes(body.action)) {
       if (profile.role !== "super_admin") throw new Error("Super admin role required");
       if (body.target === user.id) throw new Error("You cannot disable or reset your own account here.");

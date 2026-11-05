@@ -3,10 +3,13 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import { ArrowUpRight, Check, ChevronRight, Eye, EyeOff, FileText, LayoutDashboard, LogOut, Search, ShieldCheck, Trash2, Upload, Users, X } from "lucide-react";
-import { billAmount, billType, isSupportingNote, customerKey, groupCustomers, isPaid, indiaDate, money, report, type DeskBill, type Metric, type Snapshot, type Staff } from "@/lib/desk";
+import { cashierView, billAmount, billType, isSupportingNote, customerKey, groupCustomers, isPaid, indiaDate, money, report, type DeskBill, type Metric, type Snapshot, type Staff } from "@/lib/desk";
 import { DEMO_KEY, demoAccounts, demoAction, demoPdf, freshDemo, upgradeDemo } from "@/lib/desk-demo";
 import type { ExtractedBill } from "@/lib/pdf/extract";
 import { importReferenceBills, isBuiltInSample } from "@/lib/import-reference-bills";
+import { DeskShell } from "./desk-shell";
+import { fileIdentity, selectFiles, restoreDrafts, withTwoWorkers, type UploadFile } from "@/lib/upload-queue";
+import { PdfLinks } from "@/lib/pdf-preview";
 import "./service-desk.css";
 
 const labels = { cashier: "Cashier", service_advisor: "Service advisor", super_admin: "Super admin" };
@@ -14,7 +17,7 @@ const metricNames = { billed: "Service bill value", collections: "Collected in f
 const dateTime = (date: string) => new Date(date).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const empty: Snapshot = { bills: [], payments: [], staff: [], audit: [], as_of: "" };
 type ActionBody = { action: string; target?: string; reason?: string; [key: string]: unknown };
-type UploadFile = { id: string; file: File; state: "selected" | "uploading" | "reading" | "ready" | "failed"; error?: string };
+
 const readDemo = (): Snapshot => {
   const stored = JSON.parse(localStorage.getItem(DEMO_KEY) || "null") ?? freshDemo();
   const upgraded = upgradeDemo(stored);
@@ -22,12 +25,14 @@ const readDemo = (): Snapshot => {
   return upgraded;
 };
 
-export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) {
-  const [profile, setProfile] = useState<Staff | null>(null);
-  const [data, setData] = useState<Snapshot>(empty);
+export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo: boolean; ready: boolean; initial?: { profile: Staff; snapshot?: Snapshot }; initialError?: string }) {
+  const [profile, setProfile] = useState<Staff | null>(initial?.profile ?? null);
+  const [data, setData] = useState<Snapshot>(initial?.snapshot ?? empty);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [tab, setTab] = useState(demo ? "bills" : "overview");
+  const [notice, setNotice] = useState(initialError);
+  const [restoring, setRestoring] = useState(demo || Boolean(initialError));
+  const [refreshError, setRefreshError] = useState(initialError);
+  const [tab, setTab] = useState(initial?.profile.role === "cashier" ? "incoming" : demo ? "bills" : "overview");
   const [metric, setMetric] = useState<Metric>("billed");
   const [query, setQuery] = useState("");
   const [customerFilter, setCustomerFilter] = useState<string | null>(null);
@@ -36,8 +41,39 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
   const [advisor, setAdvisor] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
-  const [preview, setPreview] = useState<DeskBill[]>([]);
-  const [files, setFiles] = useState<UploadFile[]>([]);
+  const [files, setFiles] = useState<UploadFile[]>(() => initial?.profile.role === "service_advisor" && initial.snapshot ? restoreDrafts(initial.snapshot) : []);
+  const preview = files.flatMap(f => f.bills);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const batchLock = useRef(false);
+  const refreshVersion = useRef(0);
+  const links = useRef(new PdfLinks());
+  const localUrls = useRef(new Map<string, string>());
+  const pdfRequest = useRef(0);
+  const pdfDisplayStart = useRef("");
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState("");
+  const profileId = useRef(initial?.profile.id);
+  const initialFetch = useRef(demo || Boolean(initialError));
+  const clearPreviews = useCallback(() => {
+    pdfRequest.current++;
+    links.current.clear();
+    for (const url of localUrls.current.values()) URL.revokeObjectURL(url);
+    localUrls.current.clear();
+    setPdfUrl(""); setPdfError(""); setPdfLoading(false);
+  }, []);
+  const acceptSnapshot = useCallback((snapshot: Snapshot, user: Staff | null) => {
+    setData(snapshot); setProfile(user); setRestoring(false); setRefreshError("");
+    if (user?.id !== profileId.current) {
+      clearPreviews(); setFiles([]); setSelectedId(null); setUploadOpen(false);
+      setTab(user?.role === "cashier" ? "incoming" : demo ? "bills" : "overview");
+      profileId.current = user?.id;
+    }
+    if (user?.role === "service_advisor" && !batchLock.current) setFiles(current => {
+      const recovered = restoreDrafts({ ...snapshot, bills: snapshot.bills.filter(b => b.uploaded_by === user.id) });
+      return [...current, ...recovered.filter(d => !current.some(f => f.uploadId === d.uploadId))];
+    });
+  }, [clearPreviews, demo]);
   const [showPassword, setShowPassword] = useState(false);
   const [staffPassword, setStaffPassword] = useState("");
 
@@ -50,10 +86,12 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
     return result;
   }, []);
   const refresh = useCallback(async () => {
+    const version = refreshVersion.current;
     if (demo) {
       const response = await fetch("/api/demo/reference-bills");
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
+      if (version !== refreshVersion.current) return;
       const current = readDemo();
       if (current.bills.some(isBuiltInSample) && !localStorage.getItem("service-desk-before-reference-import")) {
         localStorage.setItem("service-desk-before-reference-import",JSON.stringify(current));
@@ -62,30 +100,43 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
       localStorage.setItem(DEMO_KEY,JSON.stringify(snapshot));
       const id = sessionStorage.getItem("desk-demo-user");
       const user = snapshot.staff.find(p => p.id === id && p.active) ?? null;
-      setData(snapshot); setProfile(user);
+      acceptSnapshot(snapshot, user);
     } else if (ready) {
       const response = await fetch("/api/desk", { credentials: "same-origin", cache: "no-store" });
-      if (response.status === 401) { setProfile(null); setData(empty); return; }
+      if (version !== refreshVersion.current) return;
+      if (response.status === 401) { acceptSnapshot(empty, null); clearPreviews(); setFiles([]); return; }
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not load workspace");
-      setProfile(result.profile); if (result.snapshot) setData(result.snapshot);
+      if (version === refreshVersion.current) acceptSnapshot(result.snapshot ?? empty, result.profile);
     }
-  }, [demo, ready]);
+  }, [demo, ready, acceptSnapshot, clearPreviews]);
   useEffect(() => {
-    const initial = window.setTimeout(() => void refresh().catch(e => setNotice(e.message)), 0);
-    const listener = () => void refresh().catch(e => { setNotice(e.message); setProfile(null); });
-    window.addEventListener("storage", listener);
+    const listener = () => void refresh().catch(e => { setNotice(e.message); setRefreshError(e.message); });
     const timer = window.setInterval(listener, 30000);
-    return () => { window.clearTimeout(initial); window.removeEventListener("storage", listener); window.clearInterval(timer); };
+    window.addEventListener("storage", listener);
+    if (initialFetch.current) { initialFetch.current = false; listener(); }
+    return () => { window.removeEventListener("storage", listener); window.clearInterval(timer); };
   }, [refresh]);
-  useEffect(() => () => { if (pdfUrl.startsWith("blob:")) URL.revokeObjectURL(pdfUrl); }, [pdfUrl]);
+  useEffect(() => () => clearPreviews(), [clearPreviews]);
+  useEffect(() => {
+    if (!files.length) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [files.length]);
+  const selectedBill = preview.find(b => b.id === selectedId) ?? data.bills.find(b => b.id === selectedId);
+  useEffect(() => {
+    if (!selectedBill || demo || localUrls.current.has(selectedBill.upload_id)) return;
+    void links.current.get(selectedBill.upload_id, () => api("/api/desk", { action: "pdf", target: selectedBill.id })).catch(() => {});
+  }, [selectedBill, api, demo]);
 
   function save(snapshot: Snapshot) { localStorage.setItem(DEMO_KEY, JSON.stringify(snapshot)); setData(snapshot); }
   async function perform(task: () => Promise<void>) {
     if (busy) return;
+    refreshVersion.current++;
     setBusy(true); setNotice("");
-    try { await task(); } catch (e) { setNotice(e instanceof Error ? e.message : "Something went wrong"); }
-    finally { setBusy(false); }
+    try { await task(); } catch (e) { const message = e instanceof Error ? e.message : "Something went wrong"; setNotice(message); if (task === refresh) setRefreshError(message); }
+    finally { refreshVersion.current++; setBusy(false); }
   }
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -100,20 +151,24 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
         const expected = overrides[staffId] ?? demoAccounts.find(p => p.staff_id === staffId)?.password;
         if (!account || expected !== password) throw new Error("Invalid user ID or password");
         sessionStorage.setItem("desk-demo-user", account.id);
-        save(snapshot); setProfile(account);
+        acceptSnapshot(snapshot, account);
       } else {
         await api("/api/auth/login", { staffId, password });
         await refresh();
       }
-      setTab(demo ? "bills" : "overview"); setMetric("billed"); setCustomerFilter(null);
+      setMetric("billed"); setCustomerFilter(null);
     });
   }
   async function logout() {
+    if (batchLock.current) { setNotice("Wait for the current batch to finish before signing out."); return; }
+    if (files.length && !window.confirm("Leave unfinished work? Uploaded drafts can be recovered; local files must be selected again.")) return;
+    refreshVersion.current++;
     if (!demo) {
       try { await api("/api/auth/logout", {}); }
       catch (e) { setNotice(e instanceof Error ? e.message : "Could not sign out"); return; }
     }
-    sessionStorage.removeItem("desk-demo-user"); setProfile(null); setData(empty); setSelectedId(null); setPreview([]); setFiles([]); setShowPassword(false); setNotice(""); setStaffPassword("");
+    refreshVersion.current++;
+    sessionStorage.removeItem("desk-demo-user"); setProfile(null); setData(empty); setSelectedId(null); clearPreviews(); profileId.current = undefined; setFiles([]); setUploadOpen(false); setShowPassword(false); setNotice(""); setStaffPassword("");
   }
   async function action(body: ActionBody) {
     if (!profile) return;
@@ -156,89 +211,140 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
       setNotice("Saved successfully.");
     });
   }
-  async function upload(item: UploadFile): Promise<DeskBill[]> {
-      if (!profile) throw new Error("Staff login required");
-      const file = item.file;
-      const state = (value: UploadFile["state"]) => setFiles(current => current.map(f => f.id === item.id ? { ...f, state: value, error: undefined } : f));
-      if (!file.name.toLowerCase().endsWith(".pdf") || !file.size || file.size > 10 * 1024 * 1024) throw new Error("Choose a nonempty PDF up to 10 MB");
-      state("uploading");
-      if (demo) {
-        const form = new FormData(); form.set("file", file);
-        state("reading");
-        const response = await fetch("/api/demo/extract", { method: "POST", body: form });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error);
-        const snapshot = readDemo();
-        if (snapshot.bills.some(b => b.uploads?.file_hash === result.hash)) throw new Error("This PDF has already been uploaded");
-        const uploadId = crypto.randomUUID();
-        await demoPdf(uploadId, file);
-        return result.bills.map((b: ExtractedBill) => ({
-          id: crypto.randomUUID(), upload_id: uploadId, customer_name: b.customerName, vehicle_no_display: b.vehicleNo, vin: b.vin,
-          customer_reference: b.customerReference || null,
-          job_card_reference: b.jobCardReference || null, field_confidence: { ...b.confidence, document: b.document },
-          invoice_reference: b.invoiceReference || null, invoice_date: b.invoiceDate, amount_paise: b.amountPaise,
-          amount_evidence: b.amountEvidence, payment_evidence: b.paymentEvidence, extraction_issues: b.extractionIssues,
-          page_from: b.pageFrom, page_to: b.pageTo, uploaded_by: profile.id, created_at: new Date().toISOString(),
-          approved_at: null, approved_by: null, approval_status: "pending", status: "needs_review",
-          uploads: { original_filename: file.name, confirmed_at: null, file_hash: result.hash },
-        }));
-      } else {
-        const init = await api("/api/uploads/init", { filename: file.name, size: file.size, type: "application/pdf" });
-        const uploaded = await fetch(init.signedUrl, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: file });
-        if (!uploaded.ok) throw new Error("PDF upload failed. Please try again.");
-        state("reading");
-        const result = await api("/api/uploads/" + init.uploadId + "/process", {});
-        return result.bills;
-      }
+  function updateFile(id: string, patch: Partial<UploadFile>) {
+    setFiles(current => current.map(f => f.id === id ? { ...f, ...patch } : f));
   }
-  async function uploadFiles() {
-    await perform(async () => {
-      const pending = files.filter(f => f.state === "selected" || f.state === "failed");
-      const results: DeskBill[][] = pending.map(() => []);
-      let next = 0, failed = 0;
-      async function worker() {
-        while (next < pending.length) {
-          const index = next++, item = pending[index];
-          try {
-            results[index] = await upload(item);
-            setPreview([...preview, ...results.flat()]);
-            setFiles(current => current.map(f => f.id === item.id ? { ...f, state: "ready", error: undefined } : f));
-          } catch (e) {
-            failed++;
-            setFiles(current => current.map(f => f.id === item.id ? { ...f, state: "failed", error: e instanceof Error ? e.message : "Upload failed. Try again." } : f));
-          }
-        }
-      }
-      await Promise.all([worker(), worker()]);
-      setNotice(`${pending.length - failed} PDF(s) ready for review.${failed ? ` ${failed} failed; check the file messages and retry.` : " View each original, then submit to the cashier."}`);
+  function addFiles(incoming: File[]) {
+    const { added, errors } = selectFiles(files, incoming);
+    const entries = added.map(file => {
+      const id = crypto.randomUUID(), localUrl = URL.createObjectURL(file);
+      localUrls.current.set(id, localUrl);
+      return { id, identity: fileIdentity(file), name: file.name, file, localUrl, progress: 0, bills: [], state: "selected" as const };
     });
+    setFiles(current => [...current, ...entries]);
+    setNotice(errors.join(" "));
   }
-  async function submit() {
-    await perform(async () => {
-      if (!preview.length || !profile) return;
-      if (demo) {
-        const snapshot = readDemo();
-        const now = new Date().toISOString();
-        if (preview.some(p => snapshot.bills.some(b => b.uploads?.file_hash === p.uploads?.file_hash))) throw new Error("A PDF has already been submitted");
-        preview.forEach(b => {
-          snapshot.bills.unshift({ ...b, customer_id: "demo-customer:" + customerKey(b), uploads: { ...b.uploads!, confirmed_at: now } });
-          snapshot.audit.unshift({ id: crypto.randomUUID(), bill_id: b.id, actor_id: profile.id, action: "submitted", created_at: now, detail: {} });
-        });
-        save(snapshot);
-        setPreview([]);
-      } else {
-        const failures: string[] = [];
-        for (const uploadId of new Set(preview.map(b => b.upload_id))) {
-          try {
-            await api("/api/uploads/" + uploadId + "/confirm", {});
-            setPreview(current => current.filter(b => b.upload_id !== uploadId));
-          } catch (e) { failures.push(`${preview.find(b => b.upload_id === uploadId)?.uploads?.original_filename || "PDF"}: ${e instanceof Error ? e.message : "Submission failed"}`); }
-        }
-        await refresh();
-        if (failures.length) throw new Error("Some PDFs were not submitted. " + failures.join("; "));
+  async function upload(item: UploadFile): Promise<DeskBill[]> {
+    if (!profile) throw new Error("Staff login required");
+    const file = item.file;
+    updateFile(item.id, { state: "uploading", error: undefined });
+    if (demo) {
+      if (!file) throw new Error("Reselect the original PDF.");
+      const form = new FormData(); form.set("file", file);
+      updateFile(item.id, { state: "reading", progress: 70 });
+      const response = await fetch("/api/demo/extract", { method: "POST", body: form });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      const snapshot = readDemo();
+      if (snapshot.bills.some(b => b.uploads?.file_hash === result.hash && b.uploads?.confirmed_at)) throw new Error("This PDF has already been submitted");
+      const uploadId = item.uploadId || crypto.randomUUID();
+      await demoPdf(uploadId, file);
+      updateFile(item.id, { uploadId, stored: true });
+      if (item.localUrl) localUrls.current.set(uploadId, item.localUrl);
+      const bills: DeskBill[] = result.bills.map((b: ExtractedBill) => ({
+        id: crypto.randomUUID(), upload_id: uploadId, customer_name: b.customerName, vehicle_no_display: b.vehicleNo, vin: b.vin,
+        customer_reference: b.customerReference || null, job_card_reference: b.jobCardReference || null,
+        field_confidence: { ...b.confidence, document: b.document },
+        invoice_reference: b.invoiceReference || null, invoice_date: b.invoiceDate, amount_paise: b.amountPaise,
+        amount_evidence: b.amountEvidence, payment_evidence: b.paymentEvidence, extraction_issues: b.extractionIssues,
+        page_from: b.pageFrom, page_to: b.pageTo, uploaded_by: profile.id, created_at: new Date().toISOString(),
+        approved_at: null, approved_by: null, approval_status: "pending", status: "needs_review",
+        uploads: { original_filename: file.name, confirmed_at: null, file_hash: result.hash },
+      }));
+      snapshot.bills.push(...bills); save(snapshot);
+      return bills;
+    }
+    let uploadId = item.uploadId;
+    if (!item.stored) {
+      if (!file) throw new Error("Reselect the original PDF to finish uploading.");
+      const init = await api("/api/uploads/init", { uploadId, filename: file.name, size: file.size, type: "application/pdf" });
+      uploadId = init.uploadId;
+      updateFile(item.id, { uploadId, signedUrl: init.signedUrl });
+      try { await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("PUT", init.signedUrl); xhr.setRequestHeader("Content-Type", "application/pdf");
+        xhr.upload.onprogress = event => { if (event.lengthComputable) updateFile(item.id, { progress: Math.round(event.loaded / event.total * 70) }); };
+        xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error("PDF upload failed. Retry this file."));
+        xhr.onerror = () => reject(new Error("PDF upload failed. Check your connection and retry."));
+        xhr.timeout = 120_000; xhr.ontimeout = () => reject(new Error("PDF upload timed out. Retry this file."));
+        xhr.send(file);
+      }); } catch (transferError) {
+        // Check storage through processing before asking the user to transfer again.
+        try {
+          const result = await api("/api/uploads/" + uploadId + "/process", {});
+          updateFile(item.id, { stored: true });
+          if (item.localUrl && uploadId) localUrls.current.set(uploadId, item.localUrl);
+          return result.bills;
+        } catch { throw transferError; }
       }
-      setFiles(current => current.filter(f => f.state !== "ready"));
-      setNotice("Submitted. The cashier can now review and approve these bills.");
+      updateFile(item.id, { stored: true });
+    }
+    if (item.localUrl && uploadId) localUrls.current.set(uploadId, item.localUrl);
+    updateFile(item.id, { state: "reading", progress: 80 });
+    const result = await api("/api/uploads/" + uploadId + "/process", {});
+    return result.bills;
+  }
+  async function uploadFiles(only?: UploadFile) {
+    if (batchLock.current) return;
+    batchLock.current = true; refreshVersion.current++; setBatchBusy(true); setNotice("");
+    const pending = only ? [only] : files.filter(f => !f.bills.length && (f.state === "selected" || f.state === "failed"));
+    let failed = 0;
+    try {
+      await withTwoWorkers(pending, async item => {
+        try { updateFile(item.id, { bills: await upload(item), state: "ready", progress: 100, error: undefined }); }
+        catch (e) { failed++; updateFile(item.id, { state: "failed", error: e instanceof Error ? e.message : "Upload failed. Retry this file." }); }
+      });
+      setNotice(`${pending.length - failed} PDF(s) ready for review. ${failed} failed.`);
+    } finally { refreshVersion.current++; batchLock.current = false; setBatchBusy(false); }
+  }
+  async function submit(only?: UploadFile) {
+    if (batchLock.current || !profile) return;
+    batchLock.current = true; refreshVersion.current++; setBatchBusy(true); setNotice("");
+    const pending = only ? [only] : files.filter(f => f.bills.length && f.state === "ready");
+    let failed = 0;
+    try {
+      await withTwoWorkers(pending, async item => {
+        updateFile(item.id, { state: "submitting", error: undefined });
+        try {
+          if (demo) {
+            const snapshot = readDemo(), now = new Date().toISOString();
+            if (snapshot.bills.some(b => b.upload_id !== item.uploadId && b.uploads?.confirmed_at && b.uploads.file_hash === item.bills[0].uploads?.file_hash)) throw new Error("This PDF has already been submitted");
+            item.bills.forEach(b => {
+              const index = snapshot.bills.findIndex(existing => existing.id === b.id);
+              snapshot.bills[index] = { ...b, customer_id: "demo-customer:" + customerKey(b), uploads: { ...b.uploads!, confirmed_at: now } };
+              snapshot.audit.unshift({ id: crypto.randomUUID(), bill_id: b.id, actor_id: profile.id, action: "submitted", created_at: now, detail: {} });
+            });
+            save(snapshot);
+          } else await api("/api/uploads/" + item.uploadId + "/confirm", {});
+          setFiles(current => current.filter(f => f.id !== item.id));
+          setSelectedId(current => item.bills.some(b => b.id === current) ? null : current);
+        } catch (e) { failed++; updateFile(item.id, { state: "ready", error: e instanceof Error ? e.message : "Submission failed. Retry this PDF." }); }
+      });
+      // Refresh only after successful items have been removed; a failed refresh must not undo submission.
+      if (!demo) await refresh().catch(e => setRefreshError(e.message));
+      setNotice(`${pending.length - failed} PDF(s) submitted. ${failed} failed${failed ? "; retry the remaining PDFs." : "."}`);
+    } finally { refreshVersion.current++; batchLock.current = false; setBatchBusy(false); }
+  }
+  function forgetPreview(uploadId: string) {
+    links.current.delete(uploadId);
+    const url = localUrls.current.get(uploadId);
+    if (url) {
+      URL.revokeObjectURL(url);
+      for (const [key, value] of localUrls.current) if (value === url) localUrls.current.delete(key);
+    }
+    pdfRequest.current++; setPdfUrl(""); setPdfLoading(false); setPdfError("");
+  }
+  async function removeFile(item: UploadFile) {
+    if (batchLock.current || busy) return;
+    if (item.uploadId && !window.confirm("Delete this uploaded draft PDF and its draft bills?")) return;
+    await perform(async () => {
+      if (item.uploadId) {
+        if (demo) { const snapshot = readDemo(); snapshot.bills = snapshot.bills.filter(b => b.upload_id !== item.uploadId); save(snapshot); }
+        else { const result = await api("/api/uploads/" + item.uploadId + "/delete", {}); if (result.warning) setNotice(result.warning); }
+      }
+      forgetPreview(item.uploadId || item.id);
+      setFiles(current => current.filter(f => f.id !== item.id));
+      if (!demo && item.uploadId) await refresh();
     });
   }
   async function deleteBill(bill: DeskBill) {
@@ -250,25 +356,52 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
         const snapshot = readDemo();
         snapshot.bills = snapshot.bills.filter(b => b.id !== bill.id); save(snapshot);
       } else { const result = await api("/api/bills/" + bill.id + "/delete", {}); warning = result.warning; }
-      setPreview(current => current.filter(b => b.id !== bill.id));
+      forgetPreview(bill.upload_id);
+      setFiles(current => current.map(f => f.uploadId === bill.upload_id ? { ...f, localUrl: undefined, bills: f.bills.filter(b => b.id !== bill.id) } : f).filter(f => f.uploadId !== bill.upload_id || f.bills.length));
       setSelectedId(null); setPdfUrl("");
       if (!demo) await refresh();
       setNotice(warning || "Draft bill deleted.");
     });
   }
-  async function openPdf(bill: DeskBill) {
-    await perform(async () => {
-      if (demo) {
-        if (bill.reference_file) {
-          setPdfUrl("/api/demo/reference-bills?file=" + encodeURIComponent(bill.reference_file));
-          return;
-        }
-        const blob = await demoPdf(bill.upload_id);
-        if (!blob) throw new Error("This PDF is not stored in this browser. Please upload the original again.");
-        setPdfUrl(URL.createObjectURL(blob));
-      } else setPdfUrl((await api("/api/desk", { action: "pdf", target: bill.id })).url);
-    });
+  function selectBill(id: string | null) {
+    pdfRequest.current++; setSelectedId(id); setPdfUrl(""); setPdfLoading(false); setPdfError("");
   }
+  async function openPdf(bill: DeskBill) {
+    const request = ++pdfRequest.current;
+    setPdfLoading(true); setPdfError(""); setPdfUrl("");
+    try {
+      let url = localUrls.current.get(bill.upload_id);
+      if (!url) {
+        let blob: Blob;
+        if (demo && !bill.reference_file) {
+          const stored = await demoPdf(bill.upload_id);
+          if (!stored) throw new Error("This PDF is not stored in this browser. Please upload the original again.");
+          blob = stored;
+        } else {
+          const link = demo ? { url: "/api/demo/reference-bills?file=" + encodeURIComponent(bill.reference_file || "") } : await links.current.get(bill.upload_id, () => api("/api/desk", { action: "pdf", target: bill.id }));
+          if (request !== pdfRequest.current) return;
+          const started = "pdf-download-start:" + request;
+          performance.mark(started);
+          const response = await fetch(link.url);
+          if (!response.ok) { links.current.delete(bill.upload_id); throw new Error("PDF could not be downloaded. Please retry."); }
+          blob = await response.blob();
+          performance.measure("pdf-download", started); performance.clearMarks(started);
+          if ("timings" in link && link.timings) {
+            performance.measure("pdf-authorization", { start: 0, duration: link.timings.authorization });
+            performance.measure("pdf-signing", { start: 0, duration: link.timings.signing });
+          }
+        }
+        if (request !== pdfRequest.current) return;
+        url = URL.createObjectURL(blob); localUrls.current.set(bill.upload_id, url);
+      }
+      if (request !== pdfRequest.current) return;
+      pdfDisplayStart.current = "pdf-display-start:" + request;
+      performance.mark(pdfDisplayStart.current);
+      setPdfUrl(url);
+    } catch (e) { if (request === pdfRequest.current) { setPdfError(e instanceof Error ? e.message : "PDF could not be loaded"); setPdfLoading(false); } }
+  }
+
+  if (restoring && !profile) return <DeskShell>{refreshError ? <div role="alert"><p>{refreshError}</p><button onClick={() => void perform(refresh)}>Retry workspace</button></div> : undefined}</DeskShell>;
 
   if (!profile) return <div className="sd-login">
     <section className="sd-login-story" aria-labelledby="sd-login-title">
@@ -299,8 +432,8 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
   const summary = report(visible, from, to, advisor);
   const selected = preview.find(b => b.id === selectedId) ?? data.bills.find(b => b.id === selectedId);
   const person = (id: string | null) => data.staff.find(p => p.id === id)?.full_name ?? "Staff member";
-  const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : isSupportingNote(b) ? "Supporting note" : b.approval_status !== "approved" ? "Awaiting approval" : isPaid(b, data.payments) ? "Paid in full" : "Unpaid";
-  const list = tab === "bills" || profile.role === "service_advisor" ? visible.bills : metric === "collections" ? summary.payments.map(p => data.bills.find(b => b.id === p.bill_id)!).filter(Boolean) : metric === "billed" ? summary.billed : metric === "pending" ? summary.pending : summary.outstanding;
+  const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : isSupportingNote(b) ? "No collection required" : b.approval_status !== "approved" ? "Awaiting approval" : isPaid(b, data.payments) ? "Paid in full" : "Unpaid";
+  const list = profile.role === "cashier" && ["incoming", "unpaid", "archive"].includes(tab) ? visible.bills.filter(b => cashierView(b, data.payments) === tab) : tab === "bills" || profile.role === "service_advisor" ? visible.bills : metric === "collections" ? summary.payments.map(p => data.bills.find(b => b.id === p.bill_id)!).filter(Boolean) : metric === "billed" ? summary.billed : metric === "pending" ? summary.pending : summary.outstanding;
   const matches = (b: DeskBill) => (!customerFilter || (b.customer_id || customerKey(b)) === customerFilter) && [b.customer_name,b.customer_reference,b.vehicle_no_display,b.vin,b.invoice_reference,b.job_card_reference,billType(b),b.field_confidence?.document?.billedTo].some(v => v?.toLowerCase().includes(query.toLowerCase()));
   const rows = [...new Map(list.filter(matches).map(b => [b.id,b])).values()];
   const groups = new Map<string, number>();
@@ -311,33 +444,29 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
   return <div className="sd-app">
     <aside className="sd-sidebar"><Brand/><span className="sd-eyebrow">{labels[profile.role]} WORKSPACE</span><nav>
       <button aria-current={tab === "overview" ? "page" : undefined} onClick={() => { setTab("overview"); setQuery(""); setCustomerFilter(null); }}><LayoutDashboard size={19}/>{profile.role === "service_advisor" ? "Upload & my bills" : "Overview"}</button>
-      <button aria-current={tab === "bills" ? "page" : undefined} onClick={() => { setTab("bills"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>Bill archive<span>{visible.bills.length}</span></button>
+      {profile.role === "cashier" ? ([ ["incoming", "Incoming bills"], ["unpaid", "Unpaid bills"], ["archive", "Archive"] ]).map(([view, label]) => <button key={view} aria-current={tab === view ? "page" : undefined} onClick={() => { setTab(view); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>{label}<span>{visible.bills.filter(b => cashierView(b, data.payments) === view).length}</span></button>) : <button aria-current={tab === "bills" ? "page" : undefined} onClick={() => { setTab("bills"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>Bill archive<span>{visible.bills.length}</span></button>}
       {profile.role === "super_admin" && <><button aria-current={tab === "staff" ? "page" : undefined} onClick={() => setTab("staff")}><Users size={19}/>Staff accounts</button><button aria-current={tab === "activity" ? "page" : undefined} onClick={() => setTab("activity")}><ShieldCheck size={19}/>Activity log</button></>}
     </nav><div className="sd-sidebar-bottom"><span className="sd-retained"><ShieldCheck size={18}/>Permanent bill history</span><strong>{profile.full_name}</strong><small>{profile.staff_id} · {labels[profile.role]}</small><button className="sd-plain" onClick={() => void logout()}><LogOut size={16}/>Sign out</button></div></aside>
     <main className="sd-main">
       {demo && <div className="sd-demo-banner">LOCAL PDF WORKSPACE <span>Supplied PDFs and local uploads · no Supabase connection</span></div>}
-      <header className="sd-header"><div><span className="sd-eyebrow">BILLDESK / {labels[profile.role].toUpperCase()}</span><h1>{tab === "staff" ? "Your people. Their access." : tab === "activity" ? "A record of every action." : tab === "bills" ? "The bill archive." : profile.role === "service_advisor" ? "Send bills to the counter." : profile.role === "super_admin" ? "The numbers, with the receipts." : "Keep the counter moving."}</h1><p>{profile.role === "service_advisor" ? "Choose a PDF. Amounts and details are read automatically." : "Open any total to see exactly which bills and payments make it up."}</p></div><button className="sd-secondary" disabled={busy} onClick={() => void perform(refresh)}>Refresh</button></header>
+      <header className="sd-header"><div><span className="sd-eyebrow">BILLDESK / {labels[profile.role].toUpperCase()}</span><h1>{tab === "staff" ? "Your people. Their access." : tab === "activity" ? "A record of every action." : tab === "incoming" ? "Incoming bills" : tab === "unpaid" ? "Unpaid bills" : tab === "archive" ? "Archive" : tab === "bills" ? "The bill archive." : profile.role === "service_advisor" ? "Send bills to the counter." : profile.role === "super_admin" ? "The numbers, with the receipts." : "Keep the counter moving."}</h1><p>{profile.role === "service_advisor" ? "Choose a PDF. Amounts and details are read automatically." : "Open any total to see exactly which bills and payments make it up."}</p></div><button className="sd-secondary" disabled={busy} onClick={() => void perform(refresh)}>Refresh</button></header>
+      {refreshError && <div className="sd-notice" role="alert">{refreshError}<button disabled={busy} onClick={() => void perform(refresh)}>Retry refresh</button></div>}
       {notice && <div className="sd-notice" role="status">{notice}<button aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}
       {tab === "staff" && profile.role === "super_admin" ? <section className="sd-panel">
         <h2>Create a staff account</h2><form className="sd-staff-form" onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void action({ action: "create_staff", staffId: f.get("staffId"), fullName: f.get("fullName"), role: f.get("role") }); }}>
           <label>Full name<input name="fullName" maxLength={100} required/></label><label>User ID<input name="staffId" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Role<select name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
         </form>{staffPassword && <div className="sd-alert"><strong>Share privately; shown for this session only.</strong><p><code>{staffPassword}</code></p><button onClick={() => setStaffPassword("")}>Dismiss</button></div>}
         <div className="sd-table-wrap"><table><thead><tr><th>Name / User ID</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{data.staff.map(p => <tr key={p.id}><td><strong>{p.full_name}</strong><small>{p.staff_id}</small></td><td>{labels[p.role]}</td><td>{p.active ? "Active" : "Disabled"}{p.must_change_password ? " · Temporary password" : ""}</td><td>{p.id !== profile.id && <div className="sd-actions"><button disabled={busy} onClick={() => void action({ action: "reset_staff", target: p.id })}>Reset password</button><button disabled={busy} onClick={() => void action({ action: "toggle_staff", target: p.id, active: !p.active })}>{p.active ? "Disable" : "Enable"}</button></div>}</td></tr>)}</tbody></table></div>
-      </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { setSelectedId(a.bill_id); setPdfUrl(""); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
-        {profile.role === "service_advisor" && tab === "overview" && <section className="sd-upload-panel">
-          <div><span className="sd-eyebrow">PDF → VERIFIED BILL</span><h2>No retyping. Just upload.</h2><p>Digital PDFs up to 10 MB. The original stays attached to every bill.</p></div>
-          <label className="sd-upload-button"><Upload size={22}/>Choose bill PDFs<input type="file" accept=".pdf,application/pdf" multiple disabled={busy} onChange={e => { const selectedFiles = Array.from(e.target.files ?? []); e.target.value = ""; if (selectedFiles.length > 10) { setNotice("Choose up to 10 PDFs at a time."); return; } setFiles(selectedFiles.map(file => ({ id: crypto.randomUUID(), file, state: "selected" }))); }}/></label>
-          {files.some(f => f.state !== "ready") && <div className="sd-upload-queue" aria-live="polite"><p>Up to 10 PDFs per batch · 10 MB each</p>{files.filter(f => f.state !== "ready").map(f => <div className="sd-upload-file" key={f.id}><span>{f.file.name}<small>{f.error || ({selected:"Ready to upload",uploading:"Uploading…",reading:"Reading bill details…",ready:"Ready for review",failed:"Failed"}[f.state])}</small></span>{!busy && <button type="button" aria-label={"Remove " + f.file.name} onClick={() => setFiles(current => current.filter(item => item.id !== f.id))}><X size={16}/></button>}</div>)}{files.some(f => f.state === "selected" || f.state === "failed") && <button className="sd-primary" disabled={busy} onClick={() => void uploadFiles()}><Upload size={16}/>{busy ? "Uploading & reading…" : "Upload selected PDFs"}</button>}</div>}
-          {preview.length > 0 && <div className="sd-preview"><h3>{preview.length} bill{preview.length === 1 ? "" : "s"} ready for review</h3>{preview.map(b => <div key={b.id}><small>{b.uploads?.original_filename} · Pages {b.page_from}–{b.page_to}</small><span className="sd-bill-type">{billType(b)}</span><strong>{b.invoice_reference || "Invoice number not read"} · {billAmount(b)}</strong><p>{b.customer_name || "Customer not read"} · {b.vehicle_no_display || "Vehicle not read"} · {b.invoice_date || "Date not read"}</p><small>{b.amount_evidence}</small>{b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}<div className="sd-actions"><button disabled={busy} onClick={() => { setSelectedId(b.id); setPdfUrl(""); void openPdf(b); }}><Eye size={16}/>View bill</button><button className="sd-danger" disabled={busy} onClick={() => void deleteBill(b)}><Trash2 size={16}/>Delete bill</button></div></div>)}<div className="sd-actions"><button className="sd-primary" disabled={busy} onClick={() => void submit()}>Submit for cashier review <ChevronRight size={16}/></button></div></div>}
-        </section>}
+      </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
+        {profile.role === "service_advisor" && <div className="sd-upload-launch"><button className="sd-primary" onClick={() => setUploadOpen(true)}><Upload size={18}/>Upload bills{files.length ? ` (${files.length})` : ""}</button></div>}
         {profile.role !== "service_advisor" && tab === "overview" && <>
           <div className="sd-filters"><label>From<input type="date" value={from} max={to || undefined} onChange={e => setFrom(e.target.value)}/></label><label>To<input type="date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)}/></label><label>Uploaded by<select value={advisor} onChange={e => setAdvisor(e.target.value)}><option value="">All advisors</option>{data.staff.filter(p => p.role === "service_advisor").map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></label><button className="sd-plain" onClick={() => { setFrom(""); setTo(""); }}>All dates</button><small>INR · Asia/Kolkata</small></div>
           <div className="sd-metrics">{(["billed","collections","outstanding","pending"] as Metric[]).map(m => <button key={m} className={"sd-metric " + (metric === m ? "is-selected" : "")} onClick={() => { setMetric(m); setQuery(""); setCustomerFilter(null); }}><span>{metricNames[m]}<ArrowUpRight size={18}/></span><strong>{m === "pending" ? summary.totals[m] : money(summary.totals[m])}</strong><small>{m === "billed" ? "By invoice date" : m === "collections" ? "By payment date · net of reversals" : m === "outstanding" ? "Full invoice totals · all dates" : "All dates · excluded from billed value"}</small></button>)}</div>
         </>}
-        {customerFilter && <div className="sd-notice">Showing bills for one customer in this view.<button onClick={() => setCustomerFilter(null)}>Show all customers <X size={14}/></button></div>}<section className="sd-panel sd-ledger"><div className="sd-section-heading"><div><span className="sd-eyebrow">{tab === "bills" ? "ALL DATES · PERMANENT RECORDS" : "THE BILLS BEHIND THE NUMBER"}</span><h2>{profile.role === "service_advisor" ? "My bills" : tab === "bills" ? "All bills" : metricNames[metric]}</h2></div><label className="sd-search"><Search size={18}/><input aria-label="Search bills" placeholder="Name, vehicle, VIN, invoice or type" value={query} onChange={e => setQuery(e.target.value)}/></label></div>
+        {customerFilter && <div className="sd-notice">Showing bills for one customer in this view.<button onClick={() => setCustomerFilter(null)}>Show all customers <X size={14}/></button></div>}<section className="sd-panel sd-ledger"><div className="sd-section-heading"><div><span className="sd-eyebrow">{tab === "bills" ? "ALL DATES · PERMANENT RECORDS" : "THE BILLS BEHIND THE NUMBER"}</span><h2>{profile.role === "service_advisor" ? "My bills" : tab === "incoming" ? "Incoming bills" : tab === "unpaid" ? "Unpaid bills" : tab === "archive" ? "Archive" : tab === "bills" ? "All bills" : metricNames[metric]}</h2></div><label className="sd-search"><Search size={18}/><input aria-label="Search bills" placeholder="Name, vehicle, VIN, invoice or type" value={query} onChange={e => setQuery(e.target.value)}/></label></div>
           <div className="sd-table-wrap"><table><thead><tr><th>Invoice / Customer</th><th>Vehicle</th><th>{metric === "collections" && tab === "overview" && profile.role !== "service_advisor" ? "Collection recorded" : "Invoice date"}</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>
-            {metric === "collections" && tab === "overview" && profile.role !== "service_advisor" ? summary.payments.filter(p => { const b = data.bills.find(b => b.id === p.bill_id); return b && matches(b); }).map(p => { const b = data.bills.find(b => b.id === p.bill_id)!; return <tr key={p.id}><td><button className="sd-invoice" onClick={() => { setSelectedId(b.id); setPdfUrl(""); }}>{b.invoice_reference}</button><small>{b.customer_name}</small></td><td>{b.vehicle_no_display || "—"}</td><td>{dateTime(p.occurred_at)}<small>{person(p.recorded_by)}</small></td><td className="sd-money">{money(p.amount_paise)}</td><td><span className="sd-status">{p.source === "reversal" ? "Reversal" : "Paid in full"}</span></td><td><button aria-label="Open invoice" onClick={() => { setSelectedId(b.id); setPdfUrl(""); }}><ChevronRight size={16}/></button></td></tr>; }) :
-              customerGroups.map(group => <Fragment key={group.id}><tr className="sd-customer-group"><td colSpan={6}><button onClick={() => setCustomerFilter(group.id)}><Users size={16}/><strong>{group.name}</strong><span>{group.reference ? "Customer ID " + group.reference : "Matched by name + vehicle, or kept separate"}</span><b>{group.bills.length} bill{group.bills.length === 1 ? "" : "s"} · {group.bills.some(b => b.amount_paise !== null) ? money(group.total) : "No amount stated"}{group.missingAmounts > 0 ? " + unread totals" : ""}</b></button></td></tr>{group.bills.map(b => <tr key={b.id}><td><button className="sd-invoice" onClick={() => { setSelectedId(b.id); setPdfUrl(""); }}>{b.invoice_reference || "Needs readable invoice"}</button><small>{b.customer_name || "Billed party not read"}</small><small className="sd-bill-type">{billType(b)}</small><small>{b.uploads?.original_filename}</small></td><td>{b.vehicle_no_display || "Not read"}<small>{b.reference_file ? "Local PDF import" : person(b.uploaded_by)}</small></td><td>{b.invoice_date || "Not read"}</td><td className="sd-money">{billAmount(b)}</td><td><span className={"sd-status " + (isSupportingNote(b) ? "is-note" : billState(b) === "Paid in full" ? "is-paid" : "")}>{billState(b)}</span></td><td><button aria-label="Open invoice" onClick={() => { setSelectedId(b.id); setPdfUrl(""); }}><ChevronRight size={16}/></button></td></tr>)}</Fragment>)}
+            {metric === "collections" && tab === "overview" && profile.role !== "service_advisor" ? summary.payments.filter(p => { const b = data.bills.find(b => b.id === p.bill_id); return b && matches(b); }).map(p => { const b = data.bills.find(b => b.id === p.bill_id)!; return <tr key={p.id}><td><button className="sd-invoice" onClick={() => { selectBill(b.id); }}>{b.invoice_reference}</button><small>{b.customer_name}</small></td><td>{b.vehicle_no_display || "—"}</td><td>{dateTime(p.occurred_at)}<small>{person(p.recorded_by)}</small></td><td className="sd-money">{money(p.amount_paise)}</td><td><span className="sd-status">{p.source === "reversal" ? "Reversal" : "Paid in full"}</span></td><td><button aria-label="Open invoice" onClick={() => { selectBill(b.id); }}><ChevronRight size={16}/></button></td></tr>; }) :
+              customerGroups.map(group => <Fragment key={group.id}><tr className="sd-customer-group"><td colSpan={6}><button onClick={() => setCustomerFilter(group.id)}><Users size={16}/><strong>{group.name}</strong><span>{group.reference ? "Customer ID " + group.reference : "Matched by name + vehicle, or kept separate"}</span><b>{group.bills.length} bill{group.bills.length === 1 ? "" : "s"} · {group.bills.some(b => b.amount_paise !== null) ? money(group.total) : "No amount stated"}{group.missingAmounts > 0 ? " + unread totals" : ""}</b></button></td></tr>{group.bills.map(b => <tr key={b.id}><td><button className="sd-invoice" onClick={() => { selectBill(b.id); }}>{b.invoice_reference || "Needs readable invoice"}</button><small>{b.customer_name || "Billed party not read"}</small><small className="sd-bill-type">{billType(b)}</small><small>{b.uploads?.original_filename}</small></td><td>{b.vehicle_no_display || "Not read"}<small>{b.reference_file ? "Local PDF import" : person(b.uploaded_by)}</small></td><td>{b.invoice_date || "Not read"}</td><td className="sd-money">{billAmount(b)}</td><td><span className={"sd-status " + (isSupportingNote(b) ? "is-note" : billState(b) === "Paid in full" ? "is-paid" : "")}>{billState(b)}</span></td><td><button aria-label="Open invoice" onClick={() => { selectBill(b.id); }}><ChevronRight size={16}/></button></td></tr>)}</Fragment>)}
           </tbody></table></div>
           {!rows.length && <div className="sd-empty"><FileText size={30}/><h3>No bills in this view.</h3><p>{profile.role === "service_advisor" ? "Upload a PDF to send your first bill to the cashier." : "Try all dates, a different total, or a different search."}</p></div>}
           <footer className="sd-ledger-footer"><span>{rows.length} matching bill{rows.length === 1 ? "" : "s"}{tab === "bills" ? " · " + money(rows.reduce((sum,b) => sum+(b.amount_paise ?? 0),0)) + " extracted total" : ""}{query ? " · search filters rows only" : ""}</span><span>Snapshot {data.as_of ? dateTime(data.as_of) : "—"}</span></footer>
@@ -348,22 +477,42 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
         </div>}
       </>}
     </main>
-    {selected && <BillDialog bill={selected} onClose={() => { setSelectedId(null); setPdfUrl(""); }}><div className="sd-detail-heading"><span className="sd-eyebrow">ORIGINAL BILL & ACTIVITY</span><h2>{selected.invoice_reference || "Invoice review"}</h2><p>{selected.customer_name} · {selected.vehicle_no_display}</p></div>
-      {pdfUrl && <div className="sd-pdf"><a href={pdfUrl + "#page=" + selected.page_from} target="_blank" rel="noreferrer">Open original PDF in a new tab to print ↗</a><iframe title="Original bill PDF" src={pdfUrl + "#page=" + selected.page_from}/></div>}
+    {uploadOpen && <UploadDialog onClose={() => setUploadOpen(false)}>
+      <h2>Upload bills</h2><p>Add up to 10 PDFs, 10 MB each. Review the extracted bills before submitting.</p>
+      <label className="sd-upload-button"><Upload size={20}/>Add PDFs<input aria-label="Add PDFs" type="file" accept=".pdf,application/pdf" multiple disabled={batchBusy || busy} onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }}/></label>
+      <p role="status">{files.filter(f => f.state === "ready").length} ready · {files.filter(f => f.error).length} failed · {files.length} / 10 PDFs</p>
+      <div className="sd-upload-queue">{files.map(f => <section className="sd-queue-item" key={f.id}>
+        <div className="sd-upload-file"><span><strong>{f.name}</strong><small>{({ selected: "Ready to upload", uploading: "Uploading…", reading: "Reading bill details…", ready: "Ready for review", failed: "Failed", submitting: "Submitting…" })[f.state]}</small></span><button disabled={batchBusy || busy} aria-label={"Remove " + f.name} onClick={() => void removeFile(f)}><X size={16}/></button></div>
+        <progress aria-label={"Progress for " + f.name} max={100} value={f.progress}/>
+        {f.error && <p className="sd-warning" role="alert">{f.error}</p>}
+        <div className="sd-actions">
+          {f.localUrl && !f.bills.length && <a href={f.localUrl + "#page=1"} target="_blank" rel="noreferrer">View PDF</a>}
+          {f.state === "failed" && !f.file && <label className="sd-upload-button">Reselect PDF<input aria-label={"Reselect " + f.name} type="file" accept=".pdf,application/pdf" disabled={batchBusy || busy} onChange={e => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; const result = selectFiles([], [file]); if (result.errors.length) { setNotice(result.errors.join(" ")); return; } if (file.name !== f.name) { setNotice("Select the original file with the same name."); return; } const localUrl = URL.createObjectURL(file); localUrls.current.set(f.id, localUrl); updateFile(f.id, { file, localUrl, stored: false, identity: fileIdentity(file), state: "selected", error: undefined }); }}/></label>}
+          {f.error && (f.file || f.stored || f.bills.length > 0) && <button disabled={batchBusy || busy} onClick={() => void (f.bills.length ? submit(f) : uploadFiles(f))}>Retry {f.bills.length ? "submission" : "processing"}</button>}
+        </div>
+        {f.bills.map(b => <article className="sd-review-card" key={b.id}><small>{f.name} · Pages {b.page_from}–{b.page_to}</small><span className="sd-bill-type">{billType(b)}</span><strong>{b.invoice_reference || "Invoice number not read"} · {billAmount(b)}</strong><p>{b.customer_name || "Customer not read"} · {b.vehicle_no_display || "Vehicle not read"} · {b.invoice_date || "Date not read"}</p><small>{b.amount_evidence}</small>{b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}<div className="sd-actions"><button onClick={() => { setSelectedId(b.id); void openPdf(b); }}><Eye size={16}/>View bill</button><button className="sd-danger" disabled={batchBusy || busy} onClick={() => void deleteBill(b)}><Trash2 size={16}/>Delete draft</button></div></article>)}
+      </section>)}</div>
+      {!files.length && <p>No PDFs selected. Uploaded drafts are restored here after a reload.</p>}
+      <div className="sd-actions sd-upload-footer"><button className="sd-secondary" disabled={batchBusy || busy || !files.some(f => !f.bills.length && (f.state === "selected" || f.state === "failed") && (f.file || f.stored))} onClick={() => void uploadFiles()}>Upload &amp; read all</button><button className="sd-primary" disabled={batchBusy || busy || !files.some(f => f.state === "ready")} onClick={() => void submit()}>Submit all</button></div>
+      {notice && <p role="status" className="sd-notice">{notice}</p>}
+    </UploadDialog>}
+    {selected && <BillDialog bill={selected} onClose={() => { pdfRequest.current++; setSelectedId(null); setPdfUrl(""); setPdfLoading(false); setPdfError(""); }}><div className="sd-detail-heading"><span className="sd-eyebrow">ORIGINAL BILL & ACTIVITY</span><h2>{selected.invoice_reference || "Invoice review"}</h2><p>{selected.customer_name} · {selected.vehicle_no_display}</p></div>
+      {pdfLoading && <p role="status">Loading PDF…</p>}{pdfError && <div role="alert" className="sd-warning">{pdfError}<button onClick={() => void openPdf(selected)}>Retry PDF</button></div>}
+      {pdfUrl && <div className="sd-pdf"><a href={pdfUrl + "#page=" + selected.page_from} target="_blank" rel="noreferrer">Open original PDF in a new tab to print ↗</a><iframe onLoad={() => { performance.measure("pdf-display", pdfDisplayStart.current); setPdfLoading(false); }} title="Original bill PDF" src={pdfUrl + "#page=" + selected.page_from}/></div>}
       <div className="sd-detail-totals sd-full-total"><div><small>Service bill amount · from PDF</small><strong>{billAmount(selected)}</strong></div><span className={"sd-status " + (isSupportingNote(selected) ? "is-note" : isPaid(selected,data.payments) ? "is-paid" : "")}>{billState(selected)}</span></div>
       <dl className="sd-details"><div><dt>Original file</dt><dd>{selected.uploads?.original_filename || "—"}</dd></div><div><dt>Document type</dt><dd>{billType(selected)}</dd></div><div><dt>Job / repair reference</dt><dd>{selected.job_card_reference || "Not read"}</dd></div><div><dt>Customer ID from PDF</dt><dd>{selected.customer_reference || "Not stated / not read"}</dd></div><div><dt>Customer / vehicle owner</dt><dd>{selected.customer_name || "Not read"}</dd></div><div><dt>Billed to</dt><dd>{selected.field_confidence?.document?.billedTo || selected.customer_name || "Not read"}</dd></div><div><dt>Invoice date</dt><dd>{selected.invoice_date || "Not read"}</dd></div><div><dt>VIN</dt><dd>{selected.vin || "Not read"}</dd></div><div><dt>Uploaded by</dt><dd>{selected.reference_file ? "Local PDF import" : person(selected.uploaded_by)}</dd></div><div><dt>Approved by</dt><dd>{selected.approved_by ? person(selected.approved_by) : isSupportingNote(selected) ? "Supporting note — no collection" : "Awaiting cashier"}</dd></div><div><dt>PDF pages</dt><dd>{selected.page_from}–{selected.page_to}</dd></div><div><dt>Status</dt><dd>{billState(selected)}</dd></div></dl>
       <div className="sd-extraction"><strong>Read directly from PDF</strong><p>{selected.amount_evidence || "No readable total found"}</p>{selected.field_confidence?.document?.typeEvidence && <p>{selected.field_confidence.document.typeEvidence}</p>}<small>{isSupportingNote(selected) ? "Supporting service note. No monetary total is stated; this document is retained with the customer’s bills and excluded from financial totals." : "Financial values cannot be entered or edited manually."}</small></div>
       {selected.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
-      <div className="sd-actions"><button className="sd-secondary" disabled={busy} onClick={() => void openPdf(selected)}><FileText size={16}/>View original PDF</button>
-        {!demo && profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <button className="sd-primary" disabled={busy} onClick={() => void perform(async () => { await api("/api/uploads/" + selected.upload_id + "/confirm", {}); setPreview(current => current.filter(b => b.upload_id !== selected.upload_id)); await refresh(); setNotice("Submitted for cashier review."); })}>Submit draft for review</button>}
-        {profile.role === "service_advisor" && selected.uploaded_by === profile.id && !selected.uploads?.confirmed_at && selected.approval_status === "pending" && <button className="sd-danger" disabled={busy} onClick={() => void deleteBill(selected)}><Trash2 size={16}/>Delete bill</button>}
+      <div className="sd-actions"><button className="sd-secondary" disabled={pdfLoading} onClick={() => void openPdf(selected)}><FileText size={16}/>View original PDF</button>
+        {profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <button className="sd-primary" disabled={busy || batchBusy} onClick={() => { const item = files.find(f => f.uploadId === selected.upload_id); if (item) void submit(item); }}>Submit draft for review</button>}
+        {profile.role === "service_advisor" && selected.uploaded_by === profile.id && !selected.uploads?.confirmed_at && selected.approval_status === "pending" && <button className="sd-danger" disabled={busy || batchBusy} onClick={() => void deleteBill(selected)}><Trash2 size={16}/>Delete bill</button>}
         {!demo && profile.role === "super_admin" && selected.approval_status === "pending" && selected.amount_paise === null && !isSupportingNote(selected) && <button disabled={busy} onClick={() => void action({action:"reextract",target:selected.id})}>Re-read original PDF</button>}
         {profile.role === "cashier" && selected.approval_status !== "approved" && !isSupportingNote(selected) && <button className="sd-primary" disabled={busy || selected.amount_paise === null || !selected.invoice_date || !selected.invoice_reference} onClick={() => void action({ action: "approve", target: selected.id })}>Approve bill <Check size={16}/></button>}
         {profile.role === "cashier" && selected.approval_status === "approved" && !isPaid(selected,data.payments) && <button className="sd-primary" disabled={busy} onClick={() => { if (window.confirm("Confirm the full service bill amount of " + money(selected.amount_paise) + " has been collected?")) void action({ action: "collect", target: selected.id }); }}>Mark paid in full · {money(selected.amount_paise)}</button>}
       </div>
       <h3>Full-bill collection history</h3>{data.payments.filter(p => p.bill_id === selected.id && !p.is_archived).map(p => <div className="sd-payment" key={p.id}><div><strong>{money(p.amount_paise)}</strong><small>{dateTime(p.occurred_at)} · {person(p.recorded_by)} · {p.source !== "reversal" ? "Full bill collected" : "Full collection reversed"}</small>{p.reason && <p>{p.reason}</p>}</div>{profile.role === "super_admin" && p.source !== "reversal" && !data.payments.some(r => r.reversal_of === p.id) && <button disabled={busy} onClick={() => { const reason = window.prompt("Why is this payment entry incorrect? This is a correction, not a customer refund."); if (reason) void action({ action: "reverse", target: p.id, reason }); }}>Reverse entry</button>}</div>)}
       {!data.payments.some(p => p.bill_id === selected.id && !p.is_archived) && <p className="sd-muted">No collection recorded. An invoice alone does not confirm payment.</p>}
-      {selectedGroup && <section className="sd-related"><h3>This customer’s bills</h3><p>{selectedGroup.name}{selectedGroup.reference ? " · Customer ID " + selectedGroup.reference : ""}</p><strong>{selectedGroup.bills.length} bill{selectedGroup.bills.length === 1 ? "" : "s"} · {selectedGroup.bills.some(b => b.amount_paise !== null) ? money(selectedGroup.total) + " stated invoice value" : "No monetary total stated"}{selectedGroup.missingAmounts > 0 ? " (some totals unread)" : ""}</strong><small>All accessible bills, including those awaiting approval.</small>{selectedGroup.bills.map(b => <button key={b.id} aria-current={b.id === selected.id ? "true" : undefined} onClick={() => { setSelectedId(b.id); setPdfUrl(""); }}><span>{b.invoice_reference || "Invoice not read"}<small>{billType(b)}</small><small>{b.invoice_date || "Date not read"} · {b.vehicle_no_display || "Vehicle not read"}</small></span><strong>{billAmount(b)}</strong><ChevronRight size={15}/></button>)}</section>}
+      {selectedGroup && <section className="sd-related"><h3>This customer’s bills</h3><p>{selectedGroup.name}{selectedGroup.reference ? " · Customer ID " + selectedGroup.reference : ""}</p><strong>{selectedGroup.bills.length} bill{selectedGroup.bills.length === 1 ? "" : "s"} · {selectedGroup.bills.some(b => b.amount_paise !== null) ? money(selectedGroup.total) + " stated invoice value" : "No monetary total stated"}{selectedGroup.missingAmounts > 0 ? " (some totals unread)" : ""}</strong><small>All accessible bills, including those awaiting approval.</small>{selectedGroup.bills.map(b => <button key={b.id} aria-current={b.id === selected.id ? "true" : undefined} onClick={() => { selectBill(b.id); }}><span>{b.invoice_reference || "Invoice not read"}<small>{billType(b)}</small><small>{b.invoice_date || "Date not read"} · {b.vehicle_no_display || "Vehicle not read"}</small></span><strong>{billAmount(b)}</strong><ChevronRight size={15}/></button>)}</section>}
       <h3>Bill timeline</h3>{data.audit.filter(a => a.bill_id === selected.id).map(a => <div className="sd-audit-row" key={a.id}><Check size={16}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div></div>)}
       {notice && <p className="sd-alert" role="status">{notice}</p>}
     </BillDialog>}
@@ -375,4 +524,10 @@ function BillDialog({ bill, onClose, children }: { bill: DeskBill; onClose: () =
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current; dialog?.showModal(); return () => dialog?.close(); }, []);
   return <dialog ref={ref} className="sd-dialog" aria-label={"Bill " + (bill.invoice_reference ?? "")} onCancel={onClose}><button autoFocus className="sd-dialog-close" aria-label="Close bill details" onClick={onClose}><X size={20}/></button>{children}</dialog>;
+}
+
+function UploadDialog({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { const dialog = ref.current; dialog?.showModal(); return () => dialog?.close(); }, []);
+  return <dialog ref={ref} className="sd-dialog sd-upload-dialog" aria-label="Upload and review bills" onCancel={onClose}><button autoFocus className="sd-dialog-close" aria-label="Close upload dialog" onClick={onClose}><X size={20}/></button>{children}</dialog>;
 }

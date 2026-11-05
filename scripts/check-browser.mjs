@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const { chromium } = await import(process.env.PLAYWRIGHT_PATH ? process.env.PLAYWRIGHT_PATH + "/index.mjs" : "playwright");
-const browser = await chromium.launch({headless:true});
+const browser = await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {})});
 const page = await browser.newPage({viewport:{width:1440,height:1000},baseURL:process.env.DESK_URL || "http://localhost:3000"});
 const errors=[];
 page.on("pageerror",error=>errors.push(error.message));
@@ -27,12 +27,15 @@ try {
   }
   assert.equal((await page.request.get("/api/demo/reference-bills?file=..%2F.env.local")).status(),404);
   await page.getByRole("button",{name:"Upload & my bills",exact:true}).click();
+  await page.getByRole("button",{name:"Upload bills",exact:true}).click();
   await page.locator('input[type="file"]').setInputFiles("TXA24-23030.pdf");
-  await page.getByRole("button",{name:"Upload selected PDFs",exact:true}).click();
-  await page.getByRole("button",{name:"Submit for cashier review"}).waitFor();
-  assert.match(await page.locator(".sd-preview").innerText(),/12,759/);
-  assert.match(await page.locator(".sd-preview").innerText(),/TXA24-23030/);
-  await page.getByRole("button",{name:"Submit for cashier review"}).click();
+  await page.getByRole("button",{name:"Upload & read all",exact:true}).click();
+  await page.locator(".sd-review-card").waitFor();
+  assert.match(await page.locator(".sd-review-card").innerText(),/12,759/);
+  assert.match(await page.locator(".sd-review-card").innerText(),/TXA24-23030/);
+  await page.getByRole("button",{name:"Submit all"}).click();
+  await page.getByText("0 ready · 0 failed · 0 / 10 PDFs",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"Close upload dialog",exact:true}).click();
   await page.getByRole("button",{name:"TXA24-23030",exact:true}).waitFor();
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
   await login("cashier01","CashierDemo!2026");
@@ -64,7 +67,8 @@ try {
   assert.doesNotMatch(await page.locator("dialog").innerText(),/Part paid|Remaining|₹5,000/);
   await page.getByRole("button",{name:"View original PDF"}).click();
   await page.getByTitle("Original bill PDF").waitFor();
-  assert.match(await page.getByTitle("Original bill PDF").getAttribute("src"),/ACA1145\.pdf/);
+  assert.match(await page.getByTitle("Original bill PDF").getAttribute("src"),/^blob:.*#page=1$/);
+  assert.match(await page.locator(".sd-details").innerText(),/ACA1145\.pdf/);
   await page.screenshot({path:"/tmp/desk-reference-bill.png",fullPage:true});
   await page.getByRole("button",{name:"Close bill details"}).click();
   await page.getByRole("button",{name:"Staff accounts",exact:true}).click();

@@ -206,5 +206,15 @@ await db.query("update uploads set status='review' where id=$1 and status='proce
 await confirm(deleteDraft);
 assert.equal((await claimDelete(deleteDraft)).rows.length,0);
 console.log("Draft deletion passed: owner scope, submitted protection, exclusive claims, submit race and multi-bill preservation.");
+// Removing a whole unsubmitted PDF preserves every other upload and its history.
+const wholeDraft = await draft("f".repeat(64));
+await db.query("insert into bills(upload_id,uploaded_by,page_from,page_to,connection_key,connection_key_type) values($1,$2,2,2,'test','reference')", [wholeDraft,advisor]);
+const beforeWholeDelete = (await db.query("select count(*) as n from bills")).rows[0].n;
+assert.equal((await claimDelete(wholeDraft)).rows.length,1);
+await db.query("delete from uploads where id=$1 and status='processing' and confirmed_at is null", [wholeDraft]);
+assert.equal((await db.query("select count(*) as n from bills where upload_id=$1", [wholeDraft])).rows[0].n,0);
+assert.equal((await db.query("select count(*) as n from bills")).rows[0].n,beforeWholeDelete-2);
+assert.ok((await db.query("select confirmed_at from uploads where id=$1", [winner])).rows[0].confirmed_at);
+console.log("Whole-PDF draft removal passed: cascade restricted to the selected unsubmitted upload; submitted history preserved.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

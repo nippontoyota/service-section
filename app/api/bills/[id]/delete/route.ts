@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { AuthenticationError, requireRole } from "@/lib/supabase-server";
 
+export const maxDuration = 60;
+
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { user, service } = await requireRole(request, "service_advisor");

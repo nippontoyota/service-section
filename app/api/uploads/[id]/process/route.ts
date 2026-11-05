@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
-import { extractBills, extractedBillFields } from "@/lib/pdf/extract";
 import { requireRole } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
@@ -21,6 +20,18 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       .single();
     if (uploadError || !upload) return NextResponse.json({ error: "Upload not found." }, { status: 404 });
 
+    if (upload.status === "review" && !upload.confirmed_at) {
+      const { data: bills, error } = await service.from("bills").select("*,uploads(original_filename,confirmed_at,file_hash)").eq("upload_id", id).order("page_from");
+      if (error) throw error;
+      return NextResponse.json({ uploadId: id, bills });
+    }
+    // The function has a 60-second limit. Recover an abandoned claim only after
+    // twice that window, and compare its timestamp so an active claim cannot be stolen.
+    if (upload.status === "processing" && Date.parse(upload.updated_at) < Date.now() - 120_000) {
+      const { error } = await service.from("uploads").update({ status: "failed" }).eq("id", id)
+        .eq("status", "processing").eq("updated_at", upload.updated_at).is("confirmed_at", null);
+      if (error) throw error;
+    }
     const { data: claimed, error: claimError } = await service.from("uploads")
       .update({ status: "processing", processing_error: null }).eq("id", id)
       .in("status", ["uploading", "failed"]).is("confirmed_at", null).select("id").maybeSingle();
@@ -40,6 +51,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       .not("confirmed_at", "is", null)
       .neq("id", id)
       .limit(3);
+    const { extractBills, extractedBillFields } = await import("@/lib/pdf/extract");
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const [extraction, duplicates] = await Promise.all([
       Promise.race([

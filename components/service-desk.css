@@ -270,3 +270,18 @@
   .sd-panel:not(.sd-ledger){padding:18px}
   .sd-dialog{width:calc(100% - 16px);padding:24px 16px}
 }
+
+.sd-upload-launch{margin-bottom:24px}
+.sd-upload-dialog>h2{padding-right:36px}
+.sd-upload-dialog progress{width:100%;height:7px;accent-color:var(--sd-accent)}
+.sd-upload-dialog .sd-upload-button{width:fit-content}
+.sd-upload-dialog .sd-upload-file{align-items:flex-start}
+.sd-upload-file small{display:block;margin-top:6px}
+.sd-review-card{padding:16px;background:var(--sd-subtle);border:1px solid var(--sd-line);border-radius:8px;margin-top:12px}
+.sd-review-card .sd-actions{margin-top:12px}
+.sd-queue-item{padding:12px 0;border-bottom:1px solid var(--sd-line);min-width:0}
+.sd-upload-footer{position:sticky;bottom:-35px;background:white;padding:16px 0;margin-top:12px;border-top:1px solid var(--sd-line)}
+.sd-placeholder{height:100px;margin:24px 0;border-radius:12px;background:var(--sd-line);opacity:.5}
+.sd-placeholder-large{height:320px}
+@media(max-width:760px){.sd-upload-dialog{width:100%;max-width:100%;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0;padding:24px 16px}.sd-upload-footer{bottom:-24px}.sd-upload-footer button{flex:1;min-height:44px}.sd-upload-dialog .sd-actions{gap:8px}.sd-upload-dialog .sd-upload-button{min-height:44px}}
+.sd-dialog{overscroll-behavior:contain}

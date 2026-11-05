@@ -65,6 +65,23 @@ Before deployment, run `npm ci`, `npm run lint`, `npm test`, `npm run build` and
 
 If the setup notice appears, check the Production environment variables and redeploy. If submission reports that it is temporarily unavailable, verify the final atomic-upload migration. For PDF errors, check Vercel function logs and Supabase storage access.
 
+## Batch uploads and session verification
+
+No new migration is required for the batch dialog, cashier views, PDF caching, or server session restoration. Draft PDFs are recovered from existing uploads; local selections must be selected again after a reload. The queue and preview URLs are never written to local storage in production.
+
+The isolated browser regression test requires Playwright (or `PLAYWRIGHT_PATH` pointing to its package, plus `CHROMIUM_PATH` if needed). It starts a temporary backend on port 3120 and a production server on port 3119, and refuses to run against a build configured for a different backend:
+
+```sh
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120 npm run build
+node scripts/check-batch-browser.mjs
+npm run build
+npm run check:deployment
+```
+
+Rebuild with the normal environment after the isolated test. The existing `scripts/check-browser.mjs` covers the actual parser and full financial workflow against an explicitly enabled local demo server; `scripts/check-database.mjs` runs against isolated PGlite via `PGLITE_PATH`.
+
+PDF link responses include `uploadId`, `expiresAt`, and authorization/signing durations in milliseconds, also exposed through `Server-Timing`. Browser Performance entries named `pdf-authorization`, `pdf-signing`, `pdf-download`, and `pdf-display` can be inspected separately. Authorization includes session and bill access checks; display measures the native viewer's iframe load event, not a guaranteed first-pixel render time. Local file previews skip authorization, signing, and download. The browser test prints controlled first-view measurements; actual network and device performance varies. Hosting regions are unchanged.
+
 ## Configuration references
 
 - [Vercel Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions)
