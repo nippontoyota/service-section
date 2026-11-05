@@ -28,6 +28,7 @@ try {
   assert.equal((await page.request.get("/api/demo/reference-bills?file=..%2F.env.local")).status(),404);
   await page.getByRole("button",{name:"Upload & my bills",exact:true}).click();
   await page.locator('input[type="file"]').setInputFiles("TXA24-23030.pdf");
+  await page.getByRole("button",{name:"Upload selected PDFs",exact:true}).click();
   await page.getByRole("button",{name:"Submit for cashier review"}).waitFor();
   assert.match(await page.locator(".sd-preview").innerText(),/12,759/);
   assert.match(await page.locator(".sd-preview").innerText(),/TXA24-23030/);

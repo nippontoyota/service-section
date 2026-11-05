@@ -151,11 +151,11 @@ export async function extractBills(data: Uint8Array) {
   let pages: string[] = [];
   let pageCount = 0;
   try {
-    const info = await parser.getInfo();
-    pageCount = info.pages.length || info.info?.Pages || 0;
-    if (pageCount > 100) throw new Error("PDF exceeds the 100-page limit");
-    const result = await parser.getText();
+    // Text extraction already reports the document page count. Bound the work
+    // and avoid a separate metadata/outline/permissions pass for every upload.
+    const result = await parser.getText({ first: 100 });
     pageCount = result.total;
+    if (pageCount > 100) throw new Error("PDF exceeds the 100-page limit");
     pages = result.pages.map((page) => page.text);
   } finally {
     await parser.destroy();

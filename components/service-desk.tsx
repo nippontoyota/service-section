@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
-import { ArrowUpRight, Check, ChevronRight, FileText, LayoutDashboard, LogOut, Search, ShieldCheck, Upload, Users, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronRight, Eye, EyeOff, FileText, LayoutDashboard, LogOut, Search, ShieldCheck, Trash2, Upload, Users, X } from "lucide-react";
 import { billAmount, billType, isSupportingNote, customerKey, groupCustomers, isPaid, indiaDate, money, report, type DeskBill, type Metric, type Snapshot, type Staff } from "@/lib/desk";
 import { DEMO_KEY, demoAccounts, demoAction, demoPdf, freshDemo, upgradeDemo } from "@/lib/desk-demo";
 import type { ExtractedBill } from "@/lib/pdf/extract";
@@ -14,6 +14,7 @@ const metricNames = { billed: "Service bill value", collections: "Collected in f
 const dateTime = (date: string) => new Date(date).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const empty: Snapshot = { bills: [], payments: [], staff: [], audit: [], as_of: "" };
 type ActionBody = { action: string; target?: string; reason?: string; [key: string]: unknown };
+type UploadFile = { id: string; file: File; state: "selected" | "uploading" | "reading" | "ready" | "failed"; error?: string };
 const readDemo = (): Snapshot => {
   const stored = JSON.parse(localStorage.getItem(DEMO_KEY) || "null") ?? freshDemo();
   const upgraded = upgradeDemo(stored);
@@ -36,6 +37,8 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
   const [preview, setPreview] = useState<DeskBill[]>([]);
+  const [files, setFiles] = useState<UploadFile[]>([]);
+  const [showPassword, setShowPassword] = useState(false);
   const [staffPassword, setStaffPassword] = useState("");
 
   const api = useCallback(async (url: string, body?: unknown) => {
@@ -110,7 +113,7 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
       try { await api("/api/auth/logout", {}); }
       catch (e) { setNotice(e instanceof Error ? e.message : "Could not sign out"); return; }
     }
-    sessionStorage.removeItem("desk-demo-user"); setProfile(null); setData(empty); setSelectedId(null); setPreview([]); setNotice(""); setStaffPassword("");
+    sessionStorage.removeItem("desk-demo-user"); setProfile(null); setData(empty); setSelectedId(null); setPreview([]); setFiles([]); setShowPassword(false); setNotice(""); setStaffPassword("");
   }
   async function action(body: ActionBody) {
     if (!profile) return;
@@ -153,12 +156,15 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
       setNotice("Saved successfully.");
     });
   }
-  async function upload(file: File) {
-    if (!profile) return;
-    await perform(async () => {
-      if (!file.name.toLowerCase().endsWith(".pdf") || file.size > 10 * 1024 * 1024) throw new Error("Choose a PDF up to 10 MB");
+  async function upload(item: UploadFile): Promise<DeskBill[]> {
+      if (!profile) throw new Error("Staff login required");
+      const file = item.file;
+      const state = (value: UploadFile["state"]) => setFiles(current => current.map(f => f.id === item.id ? { ...f, state: value, error: undefined } : f));
+      if (!file.name.toLowerCase().endsWith(".pdf") || !file.size || file.size > 10 * 1024 * 1024) throw new Error("Choose a nonempty PDF up to 10 MB");
+      state("uploading");
       if (demo) {
         const form = new FormData(); form.set("file", file);
+        state("reading");
         const response = await fetch("/api/demo/extract", { method: "POST", body: form });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error);
@@ -166,7 +172,7 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
         if (snapshot.bills.some(b => b.uploads?.file_hash === result.hash)) throw new Error("This PDF has already been uploaded");
         const uploadId = crypto.randomUUID();
         await demoPdf(uploadId, file);
-        setPreview(result.bills.map((b: ExtractedBill) => ({
+        return result.bills.map((b: ExtractedBill) => ({
           id: crypto.randomUUID(), upload_id: uploadId, customer_name: b.customerName, vehicle_no_display: b.vehicleNo, vin: b.vin,
           customer_reference: b.customerReference || null,
           job_card_reference: b.jobCardReference || null, field_confidence: { ...b.confidence, document: b.document },
@@ -175,15 +181,36 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
           page_from: b.pageFrom, page_to: b.pageTo, uploaded_by: profile.id, created_at: new Date().toISOString(),
           approved_at: null, approved_by: null, approval_status: "pending", status: "needs_review",
           uploads: { original_filename: file.name, confirmed_at: null, file_hash: result.hash },
-        })));
+        }));
       } else {
         const init = await api("/api/uploads/init", { filename: file.name, size: file.size, type: "application/pdf" });
         const uploaded = await fetch(init.signedUrl, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: file });
         if (!uploaded.ok) throw new Error("PDF upload failed. Please try again.");
+        state("reading");
         const result = await api("/api/uploads/" + init.uploadId + "/process", {});
-        setPreview(result.bills);
+        return result.bills;
       }
-      setNotice("PDF read. Review the extracted details below, then submit to the cashier.");
+  }
+  async function uploadFiles() {
+    await perform(async () => {
+      const pending = files.filter(f => f.state === "selected" || f.state === "failed");
+      const results: DeskBill[][] = pending.map(() => []);
+      let next = 0, failed = 0;
+      async function worker() {
+        while (next < pending.length) {
+          const index = next++, item = pending[index];
+          try {
+            results[index] = await upload(item);
+            setPreview([...preview, ...results.flat()]);
+            setFiles(current => current.map(f => f.id === item.id ? { ...f, state: "ready", error: undefined } : f));
+          } catch (e) {
+            failed++;
+            setFiles(current => current.map(f => f.id === item.id ? { ...f, state: "failed", error: e instanceof Error ? e.message : "Upload failed. Try again." } : f));
+          }
+        }
+      }
+      await Promise.all([worker(), worker()]);
+      setNotice(`${pending.length - failed} PDF(s) ready for review.${failed ? ` ${failed} failed; check the file messages and retry.` : " View each original, then submit to the cashier."}`);
     });
   }
   async function submit() {
@@ -192,14 +219,41 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
       if (demo) {
         const snapshot = readDemo();
         const now = new Date().toISOString();
-        if (snapshot.bills.some(b => b.uploads?.file_hash === preview[0].uploads?.file_hash)) throw new Error("This PDF has already been submitted");
+        if (preview.some(p => snapshot.bills.some(b => b.uploads?.file_hash === p.uploads?.file_hash))) throw new Error("A PDF has already been submitted");
         preview.forEach(b => {
           snapshot.bills.unshift({ ...b, customer_id: "demo-customer:" + customerKey(b), uploads: { ...b.uploads!, confirmed_at: now } });
           snapshot.audit.unshift({ id: crypto.randomUUID(), bill_id: b.id, actor_id: profile.id, action: "submitted", created_at: now, detail: {} });
         });
         save(snapshot);
-      } else { await api("/api/uploads/" + preview[0].upload_id + "/confirm", {}); await refresh(); }
-      setPreview([]); setNotice("Submitted. The cashier can now review and approve this bill.");
+        setPreview([]);
+      } else {
+        const failures: string[] = [];
+        for (const uploadId of new Set(preview.map(b => b.upload_id))) {
+          try {
+            await api("/api/uploads/" + uploadId + "/confirm", {});
+            setPreview(current => current.filter(b => b.upload_id !== uploadId));
+          } catch (e) { failures.push(`${preview.find(b => b.upload_id === uploadId)?.uploads?.original_filename || "PDF"}: ${e instanceof Error ? e.message : "Submission failed"}`); }
+        }
+        await refresh();
+        if (failures.length) throw new Error("Some PDFs were not submitted. " + failures.join("; "));
+      }
+      setFiles(current => current.filter(f => f.state !== "ready"));
+      setNotice("Submitted. The cashier can now review and approve these bills.");
+    });
+  }
+  async function deleteBill(bill: DeskBill) {
+    if (!window.confirm(`Delete draft ${bill.invoice_reference || bill.uploads?.original_filename || "bill"}? This cannot be undone. Other bills in the PDF will remain.`)) return;
+    await perform(async () => {
+      let warning: string | undefined;
+      if (demo) {
+        if (profile?.role !== "service_advisor" || bill.uploaded_by !== profile.id || bill.uploads?.confirmed_at || bill.approval_status !== "pending") throw new Error("Only your own draft bills can be deleted");
+        const snapshot = readDemo();
+        snapshot.bills = snapshot.bills.filter(b => b.id !== bill.id); save(snapshot);
+      } else { const result = await api("/api/bills/" + bill.id + "/delete", {}); warning = result.warning; }
+      setPreview(current => current.filter(b => b.id !== bill.id));
+      setSelectedId(null); setPdfUrl("");
+      if (!demo) await refresh();
+      setNotice(warning || "Draft bill deleted.");
     });
   }
   async function openPdf(bill: DeskBill) {
@@ -230,7 +284,7 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
     <section className="sd-login-panel"><div className="sd-login-card"><div className="sd-login-product"><Brand /><span>THE SERVICE WORKSPACE</span></div><span className="sd-eyebrow">{demo ? "LOCAL PDF TESTING · DEMO ACCOUNTS" : "NIPPON TOYOTA · STAFF ACCESS"}</span><h2>Welcome to your desk.</h2><p>Sign in with your individual staff account.</p>
       {!demo && !ready ? <p className="sd-alert">Staff login needs Supabase configuration. Follow the setup instructions in README.md.</p> : <form onSubmit={login}>
         <label>User ID<input name="staffId" placeholder="e.g. cashier01" autoComplete="username" required /></label>
-        <label>Password<input name="password" type="password" autoComplete="current-password" required /></label>
+        <label>Password<span className="sd-password-field"><input name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" required /><button className="sd-password-toggle" type="button" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={19}/> : <Eye size={19}/>}</button></span></label>
         <button className="sd-primary" disabled={busy}>{busy ? "Signing in…" : "Sign in"}<ArrowUpRight size={18}/></button>
       </form>}
       {notice && <p role="alert" className="sd-alert">{notice}</p>}
@@ -243,7 +297,7 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
 
   const visible: Snapshot = profile.role === "service_advisor" ? { ...data, bills: data.bills.filter(b => b.uploaded_by === profile.id) } : data;
   const summary = report(visible, from, to, advisor);
-  const selected = data.bills.find(b => b.id === selectedId);
+  const selected = preview.find(b => b.id === selectedId) ?? data.bills.find(b => b.id === selectedId);
   const person = (id: string | null) => data.staff.find(p => p.id === id)?.full_name ?? "Staff member";
   const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : isSupportingNote(b) ? "Supporting note" : b.approval_status !== "approved" ? "Awaiting approval" : isPaid(b, data.payments) ? "Paid in full" : "Unpaid";
   const list = tab === "bills" || profile.role === "service_advisor" ? visible.bills : metric === "collections" ? summary.payments.map(p => data.bills.find(b => b.id === p.bill_id)!).filter(Boolean) : metric === "billed" ? summary.billed : metric === "pending" ? summary.pending : summary.outstanding;
@@ -272,8 +326,9 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
       </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { setSelectedId(a.bill_id); setPdfUrl(""); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
         {profile.role === "service_advisor" && tab === "overview" && <section className="sd-upload-panel">
           <div><span className="sd-eyebrow">PDF → VERIFIED BILL</span><h2>No retyping. Just upload.</h2><p>Digital PDFs up to 10 MB. The original stays attached to every bill.</p></div>
-          <label className="sd-upload-button"><Upload size={22}/>{busy ? "Reading PDF…" : "Choose bill PDF"}<input type="file" accept=".pdf,application/pdf" disabled={busy} onChange={e => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ""; }}/></label>
-          {preview.length > 0 && <div className="sd-preview"><h3>{preview.length} bill{preview.length === 1 ? "" : "s"} read from this PDF</h3>{preview.map(b => <div key={b.id}><span className="sd-bill-type">{billType(b)}</span><strong>{b.invoice_reference || "Invoice number not read"} · {billAmount(b)}</strong><p>{b.customer_name || "Customer not read"} · {b.vehicle_no_display || "Vehicle not read"} · {b.invoice_date || "Date not read"}</p><small>{b.amount_evidence}</small>{b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}</div>)}<div className="sd-actions"><button className="sd-secondary" disabled={busy} onClick={() => setPreview([])}>Discard preview</button><button className="sd-primary" disabled={busy} onClick={() => void submit()}>Submit for cashier review <ChevronRight size={16}/></button></div></div>}
+          <label className="sd-upload-button"><Upload size={22}/>Choose bill PDFs<input type="file" accept=".pdf,application/pdf" multiple disabled={busy} onChange={e => { const selectedFiles = Array.from(e.target.files ?? []); e.target.value = ""; if (selectedFiles.length > 10) { setNotice("Choose up to 10 PDFs at a time."); return; } setFiles(selectedFiles.map(file => ({ id: crypto.randomUUID(), file, state: "selected" }))); }}/></label>
+          {files.some(f => f.state !== "ready") && <div className="sd-upload-queue" aria-live="polite"><p>Up to 10 PDFs per batch · 10 MB each</p>{files.filter(f => f.state !== "ready").map(f => <div className="sd-upload-file" key={f.id}><span>{f.file.name}<small>{f.error || ({selected:"Ready to upload",uploading:"Uploading…",reading:"Reading bill details…",ready:"Ready for review",failed:"Failed"}[f.state])}</small></span>{!busy && <button type="button" aria-label={"Remove " + f.file.name} onClick={() => setFiles(current => current.filter(item => item.id !== f.id))}><X size={16}/></button>}</div>)}{files.some(f => f.state === "selected" || f.state === "failed") && <button className="sd-primary" disabled={busy} onClick={() => void uploadFiles()}><Upload size={16}/>{busy ? "Uploading & reading…" : "Upload selected PDFs"}</button>}</div>}
+          {preview.length > 0 && <div className="sd-preview"><h3>{preview.length} bill{preview.length === 1 ? "" : "s"} ready for review</h3>{preview.map(b => <div key={b.id}><small>{b.uploads?.original_filename} · Pages {b.page_from}–{b.page_to}</small><span className="sd-bill-type">{billType(b)}</span><strong>{b.invoice_reference || "Invoice number not read"} · {billAmount(b)}</strong><p>{b.customer_name || "Customer not read"} · {b.vehicle_no_display || "Vehicle not read"} · {b.invoice_date || "Date not read"}</p><small>{b.amount_evidence}</small>{b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}<div className="sd-actions"><button disabled={busy} onClick={() => { setSelectedId(b.id); setPdfUrl(""); void openPdf(b); }}><Eye size={16}/>View bill</button><button className="sd-danger" disabled={busy} onClick={() => void deleteBill(b)}><Trash2 size={16}/>Delete bill</button></div></div>)}<div className="sd-actions"><button className="sd-primary" disabled={busy} onClick={() => void submit()}>Submit for cashier review <ChevronRight size={16}/></button></div></div>}
         </section>}
         {profile.role !== "service_advisor" && tab === "overview" && <>
           <div className="sd-filters"><label>From<input type="date" value={from} max={to || undefined} onChange={e => setFrom(e.target.value)}/></label><label>To<input type="date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)}/></label><label>Uploaded by<select value={advisor} onChange={e => setAdvisor(e.target.value)}><option value="">All advisors</option>{data.staff.filter(p => p.role === "service_advisor").map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></label><button className="sd-plain" onClick={() => { setFrom(""); setTo(""); }}>All dates</button><small>INR · Asia/Kolkata</small></div>
@@ -294,17 +349,18 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
       </>}
     </main>
     {selected && <BillDialog bill={selected} onClose={() => { setSelectedId(null); setPdfUrl(""); }}><div className="sd-detail-heading"><span className="sd-eyebrow">ORIGINAL BILL & ACTIVITY</span><h2>{selected.invoice_reference || "Invoice review"}</h2><p>{selected.customer_name} · {selected.vehicle_no_display}</p></div>
+      {pdfUrl && <div className="sd-pdf"><a href={pdfUrl + "#page=" + selected.page_from} target="_blank" rel="noreferrer">Open original PDF in a new tab to print ↗</a><iframe title="Original bill PDF" src={pdfUrl + "#page=" + selected.page_from}/></div>}
       <div className="sd-detail-totals sd-full-total"><div><small>Service bill amount · from PDF</small><strong>{billAmount(selected)}</strong></div><span className={"sd-status " + (isSupportingNote(selected) ? "is-note" : isPaid(selected,data.payments) ? "is-paid" : "")}>{billState(selected)}</span></div>
       <dl className="sd-details"><div><dt>Original file</dt><dd>{selected.uploads?.original_filename || "—"}</dd></div><div><dt>Document type</dt><dd>{billType(selected)}</dd></div><div><dt>Job / repair reference</dt><dd>{selected.job_card_reference || "Not read"}</dd></div><div><dt>Customer ID from PDF</dt><dd>{selected.customer_reference || "Not stated / not read"}</dd></div><div><dt>Customer / vehicle owner</dt><dd>{selected.customer_name || "Not read"}</dd></div><div><dt>Billed to</dt><dd>{selected.field_confidence?.document?.billedTo || selected.customer_name || "Not read"}</dd></div><div><dt>Invoice date</dt><dd>{selected.invoice_date || "Not read"}</dd></div><div><dt>VIN</dt><dd>{selected.vin || "Not read"}</dd></div><div><dt>Uploaded by</dt><dd>{selected.reference_file ? "Local PDF import" : person(selected.uploaded_by)}</dd></div><div><dt>Approved by</dt><dd>{selected.approved_by ? person(selected.approved_by) : isSupportingNote(selected) ? "Supporting note — no collection" : "Awaiting cashier"}</dd></div><div><dt>PDF pages</dt><dd>{selected.page_from}–{selected.page_to}</dd></div><div><dt>Status</dt><dd>{billState(selected)}</dd></div></dl>
       <div className="sd-extraction"><strong>Read directly from PDF</strong><p>{selected.amount_evidence || "No readable total found"}</p>{selected.field_confidence?.document?.typeEvidence && <p>{selected.field_confidence.document.typeEvidence}</p>}<small>{isSupportingNote(selected) ? "Supporting service note. No monetary total is stated; this document is retained with the customer’s bills and excluded from financial totals." : "Financial values cannot be entered or edited manually."}</small></div>
       {selected.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
       <div className="sd-actions"><button className="sd-secondary" disabled={busy} onClick={() => void openPdf(selected)}><FileText size={16}/>View original PDF</button>
-        {!demo && profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <button className="sd-primary" disabled={busy} onClick={() => void perform(async () => { await api("/api/uploads/" + selected.upload_id + "/confirm", {}); await refresh(); setNotice("Submitted for cashier review."); })}>Submit draft for review</button>}
+        {!demo && profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <button className="sd-primary" disabled={busy} onClick={() => void perform(async () => { await api("/api/uploads/" + selected.upload_id + "/confirm", {}); setPreview(current => current.filter(b => b.upload_id !== selected.upload_id)); await refresh(); setNotice("Submitted for cashier review."); })}>Submit draft for review</button>}
+        {profile.role === "service_advisor" && selected.uploaded_by === profile.id && !selected.uploads?.confirmed_at && selected.approval_status === "pending" && <button className="sd-danger" disabled={busy} onClick={() => void deleteBill(selected)}><Trash2 size={16}/>Delete bill</button>}
         {!demo && profile.role === "super_admin" && selected.approval_status === "pending" && selected.amount_paise === null && !isSupportingNote(selected) && <button disabled={busy} onClick={() => void action({action:"reextract",target:selected.id})}>Re-read original PDF</button>}
         {profile.role === "cashier" && selected.approval_status !== "approved" && !isSupportingNote(selected) && <button className="sd-primary" disabled={busy || selected.amount_paise === null || !selected.invoice_date || !selected.invoice_reference} onClick={() => void action({ action: "approve", target: selected.id })}>Approve bill <Check size={16}/></button>}
         {profile.role === "cashier" && selected.approval_status === "approved" && !isPaid(selected,data.payments) && <button className="sd-primary" disabled={busy} onClick={() => { if (window.confirm("Confirm the full service bill amount of " + money(selected.amount_paise) + " has been collected?")) void action({ action: "collect", target: selected.id }); }}>Mark paid in full · {money(selected.amount_paise)}</button>}
       </div>
-      {pdfUrl && <div className="sd-pdf"><a href={pdfUrl + "#page=" + selected.page_from} target="_blank" rel="noreferrer">Open original PDF in a new tab to print ↗</a><iframe title="Original bill PDF" src={pdfUrl + "#page=" + selected.page_from}/></div>}
       <h3>Full-bill collection history</h3>{data.payments.filter(p => p.bill_id === selected.id && !p.is_archived).map(p => <div className="sd-payment" key={p.id}><div><strong>{money(p.amount_paise)}</strong><small>{dateTime(p.occurred_at)} · {person(p.recorded_by)} · {p.source !== "reversal" ? "Full bill collected" : "Full collection reversed"}</small>{p.reason && <p>{p.reason}</p>}</div>{profile.role === "super_admin" && p.source !== "reversal" && !data.payments.some(r => r.reversal_of === p.id) && <button disabled={busy} onClick={() => { const reason = window.prompt("Why is this payment entry incorrect? This is a correction, not a customer refund."); if (reason) void action({ action: "reverse", target: p.id, reason }); }}>Reverse entry</button>}</div>)}
       {!data.payments.some(p => p.bill_id === selected.id && !p.is_archived) && <p className="sd-muted">No collection recorded. An invoice alone does not confirm payment.</p>}
       {selectedGroup && <section className="sd-related"><h3>This customer’s bills</h3><p>{selectedGroup.name}{selectedGroup.reference ? " · Customer ID " + selectedGroup.reference : ""}</p><strong>{selectedGroup.bills.length} bill{selectedGroup.bills.length === 1 ? "" : "s"} · {selectedGroup.bills.some(b => b.amount_paise !== null) ? money(selectedGroup.total) + " stated invoice value" : "No monetary total stated"}{selectedGroup.missingAmounts > 0 ? " (some totals unread)" : ""}</strong><small>All accessible bills, including those awaiting approval.</small>{selectedGroup.bills.map(b => <button key={b.id} aria-current={b.id === selected.id ? "true" : undefined} onClick={() => { setSelectedId(b.id); setPdfUrl(""); }}><span>{b.invoice_reference || "Invoice not read"}<small>{billType(b)}</small><small>{b.invoice_date || "Date not read"} · {b.vehicle_no_display || "Vehicle not read"}</small></span><strong>{billAmount(b)}</strong><ChevronRight size={15}/></button>)}</section>}

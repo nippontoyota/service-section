@@ -190,5 +190,21 @@ for (const role of ["anon","authenticated"]) {
  await db.exec("reset role");
 }
 console.log("Upload confirmation passed: duplicate hashes, cross-advisor duplicates, retries, ownership, same-job distinct files, audit rollback and role restrictions.");
+// Draft deletion claims an unsubmitted review upload before removing any bill.
+const deleteDraft = await draft("e".repeat(64));
+const claimDelete = (id, owner = advisor) => db.query("update uploads set status='processing' where id=$1 and uploaded_by=$2 and status='review' and confirmed_at is null returning id", [id, owner]);
+assert.equal((await claimDelete(deleteDraft, otherAdvisor)).rows.length, 0);
+assert.equal((await claimDelete(winner)).rows.length, 0, "Submitted uploads cannot be deleted");
+const deletionAttempts = await Promise.all([claimDelete(deleteDraft), claimDelete(deleteDraft)]);
+assert.equal(deletionAttempts.reduce((sum, r) => sum + r.rows.length, 0), 1);
+await assert.rejects(confirm(deleteDraft), /finish processing/, "Submission cannot race draft deletion");
+const sibling = randomUUID();
+await db.query("insert into bills(id,upload_id,uploaded_by,page_from,page_to,connection_key,connection_key_type) values($1,$2,$3,2,2,'test','reference')", [sibling, deleteDraft, advisor]);
+await db.query("delete from bills where upload_id=$1 and id<>$2 and uploaded_by=$3 and approval_status='pending'", [deleteDraft,sibling,advisor]);
+assert.equal((await db.query("select count(*) as n from bills where upload_id=$1",[deleteDraft])).rows[0].n,1,"Deleting one bill preserves the other PDF pages");
+await db.query("update uploads set status='review' where id=$1 and status='processing' and confirmed_at is null",[deleteDraft]);
+await confirm(deleteDraft);
+assert.equal((await claimDelete(deleteDraft)).rows.length,0);
+console.log("Draft deletion passed: owner scope, submitted protection, exclusive claims, submit race and multi-bill preservation.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");
