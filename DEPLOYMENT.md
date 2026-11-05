@@ -41,6 +41,7 @@ For a new project, apply these SQL files in order through Supabase SQL Editor:
 3. `supabase/migrations/202611040002_customer_full_payment.sql`
 4. `supabase/migrations/202611040003_app_auth.sql`
 5. `supabase/migrations/202611050001_atomic_upload_confirmation.sql`
+6. `supabase/migrations/202611050002_cashier_mark_paid.sql` (required before deploying the one-step cashier payment flow)
 
 The migrations create the private `bills` storage bucket and the staff, customer, billing, session and audit structures. For a new database only, configure `.env.local` locally and run `npm run bootstrap:staff` once. The documented starter passwords are public; replace them before staff use the public deployment. Existing configured staff accounts do not need another bootstrap.
 
@@ -61,13 +62,13 @@ Before deployment, run `npm ci`, `npm run lint`, `npm test`, `npm run build` and
 1. Open the HTTPS deployment URL and sign in with a configured staff account.
 2. Check advisor, cashier and admin views against the existing data.
 3. In a test project, upload a digital PDF, review the extracted customer/type/amount and submit it. Confirm that the same PDF cannot be submitted twice.
-4. Check customer grouping, original PDF viewing and sign-out. Test approval and collection only with test invoices.
+4. Check customer grouping, original PDF viewing and sign-out. Test Mark as paid and the move from Overview to Archive only with test invoices.
 
 If the setup notice appears, check the Production environment variables and redeploy. If submission reports that it is temporarily unavailable, verify the final atomic-upload migration. For PDF errors, check Vercel function logs and Supabase storage access.
 
 ## Batch uploads and session verification
 
-No new migration is required for the batch dialog, cashier views, PDF caching, or server session restoration. Draft PDFs are recovered from existing uploads; local selections must be selected again after a reload. The queue and preview URLs are never written to local storage in production.
+The one-step cashier payment flow requires `202611050002_cashier_mark_paid.sql`. The batch dialog, PDF caching and server session restoration require no additional migration. Draft PDFs are recovered from existing uploads; local selections must be selected again after a reload. The queue and preview URLs are never written to local storage in production.
 
 The isolated browser regression test requires Playwright (or `PLAYWRIGHT_PATH` pointing to its package, plus `CHROMIUM_PATH` if needed). It starts a temporary backend on port 3120 and a production server on port 3119, and refuses to run against a build configured for a different backend:
 

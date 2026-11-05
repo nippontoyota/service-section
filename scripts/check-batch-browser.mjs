@@ -118,11 +118,11 @@ try {
   await page.evaluate(() => { window.revokedUrls = []; const original = URL.revokeObjectURL; URL.revokeObjectURL = value => { window.revokedUrls.push(value); original(value); }; });
   await click("Sign out"); await page.getByLabel("User ID", { exact: true }).waitFor(); assert((await page.evaluate(() => window.revokedUrls.length)) > 0);
   await page.context().addCookies([{ name: "billdesk_session", value: "b".repeat(43), url: base, httpOnly: true }]); await page.reload(); await page.getByLabel("User ID", { exact: true }).waitFor();
-  // Cashier defaults to Incoming, independently of invoice date; no-charge notes are archived.
+  // Cashier defaults to Overview, independently of invoice date; no-charge notes are archived.
   profile.role = "cashier"; profile.id = "test-cashier";
   const note = { ...bills[0], id: "note", amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "warranty_note", billType: "Warranty", billedTo: "", typeEvidence: "" } } }; bills.push(note);
   await page.context().addCookies([{ name: "billdesk_session", value: token, url: base, httpOnly: true }]); await page.reload();
-  await page.locator('nav button[aria-current="page"]').filter({ hasText: "Incoming bills" }).waitFor(); assert.equal(await page.locator(".sd-invoice").count(), 3);
+  await page.locator('nav button[aria-current="page"]').filter({ hasText: "Overview" }).waitFor(); assert.equal(await page.locator(".sd-invoice").count(), 3);
   await page.getByRole("button", { name: /^Archive/ }).click(); assert.match(await page.locator("main").innerText(), /No collection required/); assert.equal(await page.locator(".sd-invoice").count(), 1);
   assert.deepEqual(errors, []);
   console.log("PASS: picker append/dedup/limit, concurrency, ordering, retries, popup recovery, page previews, multi-bill deletion, partial submission, 320/390/tablet/desktop, focus, session SSR/no login flash, transient failures, signed cache, logout cleanup and cashier views.");

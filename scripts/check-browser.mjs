@@ -40,14 +40,19 @@ try {
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
   await login("cashier01","CashierDemo!2026");
   await page.getByRole("button",{name:"Overview",exact:true}).click();
-  await page.locator(".sd-metric").filter({hasText:"Awaiting approval"}).click();
+  assert.equal(await page.locator("nav button").count(), 2);
+  assert.equal(await page.getByRole("button", {name: /Incoming bills|Unpaid bills/}).count(), 0);
   await page.getByRole("button",{name:"TXA24-23030",exact:true}).click();
   await page.getByRole("button",{name:"View original PDF"}).click();
   await page.getByTitle("Original bill PDF").waitFor();
-  await page.getByRole("button",{name:"Approve bill",exact:true}).click();
-  await page.getByRole("button",{name:/Mark paid in full/}).waitFor();
+  assert.equal(await page.getByRole("button", {name: "Approve bill", exact: true}).count(), 0);
+  await page.getByRole("button",{name:/Mark as paid/}).waitFor();
   assert.equal(await page.locator("dialog input").count(),0,"Financial details must not be manually entered");
-  await page.getByRole("button",{name:/Mark paid in full/}).click();
+  await page.getByRole("button",{name:/Mark as paid/}).click();
+  await page.getByText("Bill marked as paid and moved to Archive.", {exact:true}).waitFor();
+  assert.equal(await page.getByRole("button", {name:"TXA24-23030",exact:true}).count(), 0);
+  await page.getByRole("button", {name: /^Archive/}).click();
+  await page.getByRole("button", {name:"TXA24-23030",exact:true}).click();
   await page.getByText("Full bill collected",{exact:false}).waitFor();
   assert.doesNotMatch(await page.locator("dialog").innerText(),/Part paid|Remaining|Method not stated/);
   await page.getByRole("heading",{name:"This customer’s bills"}).waitFor();
@@ -95,5 +100,5 @@ try {
   await page.screenshot({path:"/tmp/desk-mobile.png",fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,"Page must fit mobile width");
   assert.deepEqual(errors,[]);
-  console.log("Browser checks passed: upload, extracted amount, approval, PDF preview, collection, admin drill-down, reversal, staff creation, first-login password change and mobile layout.");
+  console.log("Browser checks passed: upload, extracted amount, PDF preview, one-step payment and archive, admin drill-down, reversal, staff creation, first-login password change and mobile layout.");
 } finally { await browser.close(); }

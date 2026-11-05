@@ -2,7 +2,7 @@
 
 Think before you print.
 
-A staff-ID login for advisors, cashiers and super admins. Advisors upload digital PDFs; service amounts, dates and customer identifiers are extracted automatically. Cashiers approve bills and mark their full invoice amounts paid. Admins inspect customer-grouped bills, full collections, unpaid invoices, original PDFs and an audited history.
+A staff-ID login for advisors, cashiers and super admins. Advisors upload digital PDFs; service amounts, dates and customer identifiers are extracted automatically. Cashiers mark bills paid in one action, which approves the invoice and records its full payment together. Admins inspect customer-grouped bills, full collections, unpaid invoices, original PDFs and an audited history.
 
 For Vercel setup, environment variables and database prerequisites, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -12,7 +12,7 @@ Run npm install, then npm run dev. In .env.local, set SERVICE_DESK_DEMO=true wit
 
 | User ID | Password | Workspace |
 | --- | --- | --- |
-| cashier01 | CashierDemo!2026 | Approvals and collections |
+| cashier01 | CashierDemo!2026 | Mark bills paid |
 | advisor01 | AdvisorDemo!2026 | PDF uploads and own bills |
 | admin01 | AdminDemo!2026 | Reports, bill drill-down, staff accounts |
 
@@ -38,11 +38,11 @@ Advisors can delete their own unsubmitted drafts from the review card or bill di
 
 Uploaded documents are classified from PDF headings, invoice prefixes, billed parties, job references and repair descriptions. Filenames are not classification inputs. Supported samples include customer service, body-and-paint customer/insurance invoices, Toyota/Assurant extended warranty, warranty repair notes, free maintenance (FMSC) and Toyota Smiles/AMC service notes. Generic warranty terms printed on an ordinary invoice do not make it a warranty bill. Unknown formats remain unclassified or generic tax invoices.
 
-The vehicle owner/consignee is stored as the customer; the billed party is retained separately, so a warranty provider or insurer does not replace the customer name. Classification and its evidence are persisted in `bills.field_confidence.document` alongside the existing extraction metadata. The original customer ID, VIN, registration and job reference remain available for verification. Warranty/AMC notes with no numeric total show “No amount stated”; they remain in the archive and related customer documents, without fabricated zero-value invoices, pending collection requests or payments. Numeric invoices still require cashier approval.
+The vehicle owner/consignee is stored as the customer; the billed party is retained separately, so a warranty provider or insurer does not replace the customer name. Classification and its evidence are persisted in `bills.field_confidence.document` alongside the existing extraction metadata. The original customer ID, VIN, registration and job reference remain available for verification. Warranty/AMC notes with no numeric total show “No amount stated”; they remain in the archive and related customer documents, without fabricated zero-value invoices, pending collection requests or payments. Numeric invoices stay in the cashier Overview until marked paid.
 
 The twelve historical PDFs in `bills/` have content-based regression checks in `lib/pdf/extract.test.ts`. Their expected customer values are kept in the ignored local file `samples/private/bill-expectations.json`; these private checks skip when the fixture or PDFs are absent. The reviewed import contains eight monetary invoices and four supporting notes, grouped into ten customers; `output/bill-review/verified-bills.csv` records the verified classifications and linkage. These are shared records uploaded through the advisor workflow, not automatic demo fixtures.
 
-Each approved bill is unpaid or paid in full. The cashier confirms the full amount directly from the invoice with one button; no amount, payment-method, partial-payment or remaining-balance form is shown. Receipt fragments inside PDFs do not create payments. No payment gateway charge is performed.
+The cashier has two sections: Overview contains all submitted bills awaiting payment, including previously approved unpaid bills; Archive contains paid bills and supporting notes. **Mark as paid** approves and records the full invoice amount atomically, then moves the bill to Archive. There is no separate approval step; no amount, payment-method, partial-payment or remaining-balance form is shown. Receipt fragments inside PDFs do not create payments. No payment gateway charge is performed.
 
 Customer groups use customers.id as the primary key and bills.customer_id as the foreign key: one customer can have many bills. An exact normalized Customer ID from the PDF is the preferred identity, including across multiple vehicles. If absent, exact normalized name + VIN (or registration) forms a provisional group. Names alone never merge records; bills without sufficient identity remain separate. Documents with and without Customer ID are not silently merged across those identity types. Invoice/job-card references identify bills or visits, not customers. The group totals and related-bill links respect the logged-in role's visibility.
 
@@ -54,12 +54,13 @@ Customer groups use customers.id as the primary key and bills.customer_id as the
    - supabase/migrations/202611040002_customer_full_payment.sql
    - supabase/migrations/202611040003_app_auth.sql
    - supabase/migrations/202611050001_atomic_upload_confirmation.sql (apply before deploying the new confirmation endpoint)
+   - supabase/migrations/202611050002_cashier_mark_paid.sql (apply before deploying the one-step cashier payment flow)
 2. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.local. Set SERVICE_DESK_DEMO=false. The publishable/anon key is no longer required. Never expose the secret/service-role key in frontend variables. Supabase supplies database and private PDF storage; staff login does not use Supabase Auth, emails or Auth dashboard settings.
 3. Run npm run bootstrap:staff. It installs individually salted scrypt hashes for admin01 / AdminDemo!2026, cashier01 / CashierDemo!2026 and advisor01 / AdvisorDemo!2026. Existing profile IDs and bill history are preserved. A repeat run does not overwrite passwords already configured in staff_credentials. The three initial accounts are usable immediately; additional admin-created accounts receive unique temporary passwords and must change them at first login. Known initial passwords are not made private by hashing; reset them before opening the app to untrusted users.
 4. Restart the app. The admin can create further individual staff accounts, reset passwords and disable access. User IDs use 3–40 lowercase letters, digits or underscores. There is no public signup or email recovery; the admin resets staff access.
 5. Before enabling the new app, stop any existing external purge schedules. The migration clears expiry dates, enforces permanent retention and unschedules matching Supabase cron jobs. Deploy the retired purge-paid function too if the original function was previously deployed. It now returns 410 and deletes nothing.
 
-Paid bills, PDFs and audit records are retained. Existing bills without financial values remain pending and excluded from financial totals. Admin can open those bills and choose “Re-read original PDF”; the cashier must then approve the extraction. No historical collection is inferred from the old paid marker. PDFs already deleted by the previous retention policy cannot be recovered by this migration.
+Paid bills, PDFs and audit records are retained. Existing bills without financial values remain pending and excluded from financial totals. Admin can open those bills and choose “Re-read original PDF”; the cashier can then mark the bill paid once payment is collected. No historical collection is inferred from the old paid marker. PDFs already deleted by the previous retention policy cannot be recovered by this migration.
 
 Production demo fallback is disabled: a production build without Supabase configuration shows a setup notice instead of simulated authentication.
 

@@ -76,5 +76,5 @@ export function report(snapshot: Snapshot, from: string, to: string, staffId = "
 export function cashierView(bill: DeskBill, payments: Payment[]) {
   if (!bill.uploads?.confirmed_at) return null;
   if (isSupportingNote(bill) || isPaid(bill, payments)) return "archive";
-  return bill.approval_status === "approved" ? "unpaid" : "incoming";
+  return "overview";
 }

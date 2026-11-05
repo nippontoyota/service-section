@@ -34,7 +34,7 @@ test("full bill settlement, retries, reversal and drill-down reconcile", () => {
   const admin = data.staff.find(p => p.role === "super_admin")!;
   const advisor = data.staff.find(p => p.role === "service_advisor")!;
   assert.throws(() => demoAction(data,advisor,"approve","sample-4"));
-  assert.throws(() => demoAction(data,cashier,"collect","sample-4"));
+  assert.throws(() => demoAction(data,advisor,"collect","sample-4"));
   data.payments = data.payments.filter(p => p.bill_id !== "sample-0");
   assert.equal(balance(data.bills[0], data.payments),2000000);
   data = demoAction(data,cashier,"collect","sample-0");
@@ -140,4 +140,22 @@ test("three reference files use the real parser with supplied types and no inven
   assert.deepEqual(bills.map(b=>b.bill_type),["Counter sales","Accessories · non-TGA","Insurance claim"]);
   assert.ok(bills.every(b=>b.approval_status==="pending"&&b.approved_by===null&&b.reference_file&&b.uploads?.file_hash));
   assert.equal(importReferenceBills(importReferenceBills(freshDemo(),bills),await parseReferenceBills()).bills.length,3);
+});
+
+test("single-step payment rejects incomplete, duplicate and draft bills without recording a collection", () => {
+  const data = fixtureSnapshot();
+  const cashier = data.staff.find(p => p.role === "cashier")!;
+  const bill = data.bills.find(b => b.id === "sample-4")!;
+  for (const change of [{ amount_paise: null }, { invoice_date: null }, { invoice_reference: " " }, { invoice_reference: data.bills[0].invoice_reference }, { uploads: { original_filename: "draft.pdf", confirmed_at: null } }]) {
+    const invalid = structuredClone(data);
+    Object.assign(invalid.bills.find(b => b.id === bill.id)!, change);
+    assert.throws(() => demoAction(invalid, cashier, "collect", bill.id));
+    assert.equal(invalid.payments.length, data.payments.length);
+    assert.equal(invalid.bills.find(b => b.id === bill.id)!.approval_status, "pending");
+  }
+  bill.amount_paise = 0;
+  const paid = demoAction(data, cashier, "collect", bill.id);
+  assert.equal(paid.bills.find(b => b.id === bill.id)!.approval_status, "approved");
+  assert.equal(paid.payments.length, data.payments.length);
+  assert.equal(paid.audit[0].action, "collect");
 });
