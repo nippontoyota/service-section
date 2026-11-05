@@ -1,0 +1,19 @@
+node_modules
+.next
+.env*
+!.env.example
+coverage
+*.log
+*.tsbuildinfo
+.DS_Store
+samples/private
+/ATA545.pdf
+/ACA1145.pdf
+/INA2600101.pdf
+/bills/
+/output/
+
+# Customer documents and local credentials must never be published.
+*.pdf
+*.pem
+*.key

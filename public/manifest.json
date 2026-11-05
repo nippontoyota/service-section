@@ -1,0 +1,9 @@
+{
+  "name": "BillDesk",
+  "short_name": "BillDesk",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f0f0f0",
+  "theme_color": "#eb0a1e",
+  "description": "BillDesk — Think before you print."
+}
