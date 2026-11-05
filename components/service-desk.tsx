@@ -24,7 +24,6 @@ const readDemo = (): Snapshot => {
 export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) {
   const [profile, setProfile] = useState<Staff | null>(null);
   const [data, setData] = useState<Snapshot>(empty);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [tab, setTab] = useState(demo ? "bills" : "overview");
@@ -70,7 +69,7 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
     }
   }, [demo, ready]);
   useEffect(() => {
-    const initial = window.setTimeout(() => void refresh().catch(e => setNotice(e.message)).finally(() => setLoading(false)), 0);
+    const initial = window.setTimeout(() => void refresh().catch(e => setNotice(e.message)), 0);
     const listener = () => void refresh().catch(e => { setNotice(e.message); setProfile(null); });
     window.addEventListener("storage", listener);
     const timer = window.setInterval(listener, 30000);
@@ -217,7 +216,6 @@ export function ServiceDesk({ demo, ready }: { demo: boolean; ready: boolean }) 
     });
   }
 
-  if (loading) return <div className="sd-loading">Opening BillDesk…</div>;
   if (!profile) return <div className="sd-login">
     <section className="sd-login-story" aria-labelledby="sd-login-title">
       <header className="sd-login-brand"><div className="sd-nippon-wordmark"><svg className="sd-toyota-emblem" viewBox="0 0 64 44" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true"><ellipse cx="32" cy="22" rx="29" ry="19"/><ellipse cx="32" cy="22" rx="10" ry="19"/><ellipse cx="32" cy="13" rx="25" ry="10"/></svg><div>NIPPON <span>TOYOTA</span></div></div><span className="sd-portal-label">SERVICE PORTAL</span></header>
