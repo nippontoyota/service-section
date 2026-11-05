@@ -84,6 +84,7 @@
 .sd-filters input,.sd-filters select{padding:9px 11px;font-size:12px}
 .sd-filters>small{margin-left:auto;padding-bottom:9px}
 .sd-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:26px}
+.sd-daily-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
 .sd-metric.sd-metric{display:flex;flex-direction:column;align-items:stretch;text-align:left;background:white;padding:21px 19px;border:1px solid var(--sd-line);border-radius:12px;gap:15px;min-width:0}
 .sd-metric>span{display:flex;justify-content:space-between;gap:10px;font-size:12px}
 .sd-metric>strong{font-size:clamp(20px,2.2vw,35px);font-weight:650;letter-spacing:-1.5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}

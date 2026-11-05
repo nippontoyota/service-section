@@ -78,3 +78,13 @@ export function cashierView(bill: DeskBill, payments: Payment[]) {
   if (isSupportingNote(bill) || isPaid(bill, payments)) return "archive";
   return "overview";
 }
+
+export function cashierDailyReport(snapshot: Snapshot, day: string) {
+  const bills = snapshot.bills.filter(b => b.uploads?.confirmed_at && b.invoice_date === day && !isSupportingNote(b));
+  const paid = bills.filter(b => isPaid(b, snapshot.payments));
+  const unpaid = bills.filter(b => !isPaid(b, snapshot.payments));
+  const total = (rows: DeskBill[]) => rows.reduce((sum, b) => sum + (b.amount_paise ?? 0), 0);
+  return { bills: bills.length, paid: paid.length, unpaid: unpaid.length,
+    billedAmount: total(bills), paidAmount: total(paid), unpaidAmount: total(unpaid),
+    unreadAmounts: bills.filter(b => b.amount_paise === null).length };
+}

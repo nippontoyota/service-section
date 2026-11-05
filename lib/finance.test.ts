@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync, existsSync } from "node:fs";
 import { paise, financialFields } from "./pdf/financial";
 import { extractBills, extractCustomerReference } from "./pdf/extract";
-import { balance, customerKey, groupCustomers, report } from "./desk";
+import { balance, cashierDailyReport, customerKey, groupCustomers, report } from "./desk";
 import { freshDemo, demoAction, upgradeDemo } from "./desk-demo";
 import { fixtureSnapshot } from "./test-fixtures";
 import { importReferenceBills } from "./import-reference-bills";
@@ -61,6 +61,31 @@ test("India midnight and negative reversal dates are reported on the correct day
     { ...data.payments[0], id:"reversal", occurred_at:"2026-11-04T18:30:00Z",amount_paise:-2000000,source:"reversal" }];
   assert.equal(report(data,"2026-11-04","2026-11-04").totals.collections,2000000);
   assert.equal(report(data,"2026-11-05","2026-11-05").totals.collections,-2000000);
+});
+test("cashier daily analytics includes pending invoices and tracks their current payment status", () => {
+  let data = fixtureSnapshot();
+  const day = "2026-11-05";
+  data.bills.forEach(b => { b.invoice_date = day; });
+  data.bills[5].amount_paise = null;
+  const bill = data.bills[4];
+  data.bills.push(
+    { ...bill, id: "other-day", invoice_date: "2026-11-04" },
+    { ...bill, id: "missing-date", invoice_date: null },
+    { ...bill, id: "draft", uploads: { original_filename: "draft.pdf", confirmed_at: null } },
+    { ...bill, id: "note", amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "warranty_note", billType: "Warranty", billedTo: "", typeEvidence: "" } } },
+  );
+  data.payments.push({ ...data.payments[0], id: "archived", bill_id: data.bills[2].id, amount_paise: data.bills[2].amount_paise!, is_archived: true });
+  assert.deepEqual(cashierDailyReport(data, day), { bills: 6, paid: 2, unpaid: 4, billedAmount: 12969700, paidAmount: 6130500, unpaidAmount: 6839200, unreadAmounts: 1 });
+  const cashier = data.staff.find(p => p.role === "cashier")!;
+  data = demoAction(data, cashier, "collect", bill.id);
+  // Payment on a later day still settles the invoice in its original day's summary.
+  data.payments.at(-1)!.occurred_at = "2026-11-06T18:30:00Z";
+  const paid = cashierDailyReport(data, day);
+  assert.equal(paid.paid, 3); assert.equal(paid.unpaid, 3);
+  assert.equal(paid.billedAmount, paid.paidAmount + paid.unpaidAmount);
+  data = demoAction(data, data.staff.find(p => p.role === "super_admin")!, "reverse", data.payments.at(-1)!.id, "Correction");
+  assert.equal(cashierDailyReport(data, day).unpaid, 4);
+  assert.deepEqual(cashierDailyReport(data, "2026-11-07"), { bills: 0, paid: 0, unpaid: 0, billedAmount: 0, paidAmount: 0, unpaidAmount: 0, unreadAmounts: 0 });
 });
 test("customer groups span bills and vehicles without merging names alone", () => {
   const data = fixtureSnapshot();

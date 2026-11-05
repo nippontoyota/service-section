@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import { ArrowUpRight, Check, ChevronRight, Eye, EyeOff, FileText, LayoutDashboard, LogOut, Search, ShieldCheck, Trash2, Upload, Users, X } from "lucide-react";
-import { cashierView, billAmount, billType, isSupportingNote, customerKey, groupCustomers, isPaid, indiaDate, money, report, type DeskBill, type Metric, type Snapshot, type Staff } from "@/lib/desk";
+import { cashierDailyReport, cashierView, billAmount, billType, isSupportingNote, customerKey, groupCustomers, isPaid, indiaDate, money, report, type DeskBill, type Metric, type Snapshot, type Staff } from "@/lib/desk";
 import { DEMO_KEY, demoAccounts, demoAction, demoPdf, freshDemo, upgradeDemo } from "@/lib/desk-demo";
 import type { ExtractedBill } from "@/lib/pdf/extract";
 import { importReferenceBills, isBuiltInSample } from "@/lib/import-reference-bills";
@@ -39,6 +39,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   const [from, setFrom] = useState(demo ? "" : indiaDate().slice(0,7) + "-01");
   const [to, setTo] = useState(demo ? "" : indiaDate());
   const [advisor, setAdvisor] = useState("");
+  const [analyticsDay, setAnalyticsDay] = useState(() => indiaDate());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
   const [files, setFiles] = useState<UploadFile[]>(() => initial?.profile.role === "service_advisor" && initial.snapshot ? restoreDrafts(initial.snapshot) : []);
@@ -433,6 +434,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
 
   const visible: Snapshot = profile.role === "service_advisor" ? { ...data, bills: data.bills.filter(b => b.uploaded_by === profile.id) } : data;
   const summary = report(visible, from, to, advisor);
+  const daily = profile.role === "cashier" ? cashierDailyReport(visible, analyticsDay) : null;
   const selected = preview.find(b => b.id === selectedId) ?? data.bills.find(b => b.id === selectedId);
   const person = (id: string | null) => data.staff.find(p => p.id === id)?.full_name ?? "Staff member";
   const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : isSupportingNote(b) ? "No collection required" : isPaid(b, data.payments) ? "Paid in full" : profile.role === "cashier" ? "In progress" : b.approval_status !== "approved" ? "Awaiting approval" : "Unpaid";
@@ -462,6 +464,15 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
         <div className="sd-table-wrap"><table><thead><tr><th>Name / User ID</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{data.staff.map(p => <tr key={p.id}><td><strong>{p.full_name}</strong><small>{p.staff_id}</small></td><td>{labels[p.role]}</td><td>{p.active ? "Active" : "Disabled"}{p.must_change_password ? " · Temporary password" : ""}</td><td>{p.id !== profile.id && <div className="sd-actions"><button disabled={busy} onClick={() => void action({ action: "reset_staff", target: p.id })}>Reset password</button><button disabled={busy} onClick={() => void action({ action: "toggle_staff", target: p.id, active: !p.active })}>{p.active ? "Disable" : "Enable"}</button></div>}</td></tr>)}</tbody></table></div>
       </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
         {profile.role === "service_advisor" && <div className="sd-upload-launch"><button className="sd-primary" onClick={() => setUploadOpen(true)}><Upload size={18}/>Upload bills{files.length ? ` (${files.length})` : ""}</button></div>}
+        {daily && tab === "overview" && <section aria-label="Daily analytics">
+          <div className="sd-filters"><label>Analytics date<input type="date" value={analyticsDay} onChange={e => setAnalyticsDay(e.target.value || indiaDate())}/></label><button className="sd-plain" onClick={() => setAnalyticsDay(indiaDate())}>Today</button><small>By invoice date · current payment status · INR</small></div>
+          <div className="sd-metrics sd-daily-metrics" aria-live="polite">
+            <div className="sd-metric"><span>Total amount billed</span><strong>{money(daily.billedAmount)}</strong><small>{daily.bills} bill{daily.bills === 1 ? "" : "s"}</small></div>
+            <div className="sd-metric"><span>Total paid bills</span><strong>{daily.paid}</strong><small>{money(daily.paidAmount)} paid</small></div>
+            <div className="sd-metric"><span>Total unpaid bills</span><strong>{daily.unpaid}</strong><small>{money(daily.unpaidAmount)} unpaid</small></div>
+          </div>
+          {daily.unreadAmounts > 0 && <p className="sd-warning">{daily.unreadAmounts} bill{daily.unreadAmounts === 1 ? " has" : "s have"} unread amounts and {daily.unreadAmounts === 1 ? "is" : "are"} counted above but excluded from monetary totals.</p>}
+        </section>}
         {profile.role === "super_admin" && tab === "overview" && <>
           <div className="sd-filters"><label>From<input type="date" value={from} max={to || undefined} onChange={e => setFrom(e.target.value)}/></label><label>To<input type="date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)}/></label><label>Uploaded by<select value={advisor} onChange={e => setAdvisor(e.target.value)}><option value="">All advisors</option>{data.staff.filter(p => p.role === "service_advisor").map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></label><button className="sd-plain" onClick={() => { setFrom(""); setTo(""); }}>All dates</button><small>INR · Asia/Kolkata</small></div>
           <div className="sd-metrics">{(["billed","collections","outstanding","pending"] as Metric[]).map(m => <button key={m} className={"sd-metric " + (metric === m ? "is-selected" : "")} onClick={() => { setMetric(m); setQuery(""); setCustomerFilter(null); }}><span>{metricNames[m]}<ArrowUpRight size={18}/></span><strong>{m === "pending" ? summary.totals[m] : money(summary.totals[m])}</strong><small>{m === "billed" ? "By invoice date" : m === "collections" ? "By payment date · net of reversals" : m === "outstanding" ? "Full invoice totals · all dates" : "All dates · excluded from billed value"}</small></button>)}</div>

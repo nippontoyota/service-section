@@ -42,6 +42,21 @@ try {
   await page.getByRole("button",{name:"Overview",exact:true}).click();
   assert.equal(await page.locator("nav button").count(), 2);
   assert.equal(await page.getByRole("button", {name: /Incoming bills|Unpaid bills/}).count(), 0);
+  const dailyAnalytics = page.getByRole("region", {name: "Daily analytics"});
+  const invoiceDay = await page.evaluate(() => JSON.parse(localStorage.getItem("service-desk-finance-demo-v1")).bills.find(b => b.invoice_reference === "TXA24-23030").invoice_date);
+  const pendingCount = await page.locator(".sd-invoice").count();
+  await page.getByLabel("Analytics date").fill("2000-01-01");
+  assert.deepEqual(await dailyAnalytics.locator(".sd-metric > strong").allTextContents(), ["₹0.00", "0", "0"]);
+  assert.equal(await page.locator(".sd-invoice").count(), pendingCount);
+  await page.getByLabel("Analytics date").fill(invoiceDay);
+  const beforePaid = Number(await dailyAnalytics.locator(".sd-metric").nth(1).locator("strong").innerText());
+  const beforeUnpaid = Number(await dailyAnalytics.locator(".sd-metric").nth(2).locator("strong").innerText());
+  const billedAmount = await dailyAnalytics.locator(".sd-metric").first().locator("strong").innerText();
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({width,height:900});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    await page.screenshot({path:`/tmp/desk-daily-${width}.png`,fullPage:true});
+  }
   await page.getByRole("button",{name:"TXA24-23030",exact:true}).click();
   await page.getByRole("button",{name:"View original PDF"}).click();
   await page.getByTitle("Original bill PDF").waitFor();
@@ -50,6 +65,9 @@ try {
   assert.equal(await page.locator("dialog input").count(),0,"Financial details must not be manually entered");
   await page.getByRole("button",{name:/Mark as paid/}).click();
   await page.getByText("Bill marked as paid and moved to Archive.", {exact:true}).waitFor();
+  assert.equal(Number(await dailyAnalytics.locator(".sd-metric").nth(1).locator("strong").innerText()), beforePaid + 1);
+  assert.equal(Number(await dailyAnalytics.locator(".sd-metric").nth(2).locator("strong").innerText()), beforeUnpaid - 1);
+  assert.equal(await dailyAnalytics.locator(".sd-metric").first().locator("strong").innerText(), billedAmount);
   assert.equal(await page.getByRole("button", {name:"TXA24-23030",exact:true}).count(), 0);
   await page.getByRole("button", {name: /^Archive/}).click();
   await page.getByRole("button", {name:"TXA24-23030",exact:true}).click();

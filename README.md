@@ -44,6 +44,8 @@ The twelve historical PDFs in `bills/` have content-based regression checks in `
 
 The cashier has two sections: Overview contains all submitted bills awaiting payment, including previously approved unpaid bills; Archive contains paid bills and supporting notes. **Mark as paid** approves and records the full invoice amount atomically, then moves the bill to Archive. There is no separate approval step; no amount, payment-method, partial-payment or remaining-balance form is shown. Receipt fragments inside PDFs do not create payments. No payment gateway charge is performed.
 
+The cashier Overview also shows daily billed value, paid bill count/value and unpaid bill count/value. The date picker defaults to today in Asia/Kolkata and groups submitted invoices by invoice date, using their current payment status (including later payments and reversals). Pending invoices are included; supporting notes are excluded and unread amounts are flagged. The pending bill list below continues to show all dates.
+
 Customer groups use customers.id as the primary key and bills.customer_id as the foreign key: one customer can have many bills. An exact normalized Customer ID from the PDF is the preferred identity, including across multiple vehicles. If absent, exact normalized name + VIN (or registration) forms a provisional group. Names alone never merge records; bills without sufficient identity remain separate. Documents with and without Customer ID are not silently merged across those identity types. Invoice/job-card references identify bills or visits, not customers. The group totals and related-bill links respect the logged-in role's visibility.
 
 ## Real staff and shared records
