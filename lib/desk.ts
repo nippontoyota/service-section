@@ -8,6 +8,7 @@ export type BillDocument = {
   typeEvidence: string;
 };
 export type DeskBill = {
+  token_number?: string | null;
   bill_type?: string; reference_file?: string;
   job_card_reference?: string | null;
   field_confidence?: { document?: BillDocument };
@@ -24,6 +25,18 @@ export type Audit = { id: string; bill_id: string | null; actor_id: string; acti
 export type DraftUpload = { id: string; original_filename: string; status: string; processing_error: string | null; bills: DeskBill[] };
 export type Snapshot = { drafts?: DraftUpload[]; bills: DeskBill[]; payments: Payment[]; staff: Staff[]; audit: Audit[]; as_of: string; schema_version?: number };
 export type Metric = "paid" | "unpaid" | "pending";
+export const paymentMethods = ["Cash", "GPay", "Cheque", "Demand Draft", "Other"] as const;
+export function paymentMethod(method: unknown, other: unknown = "") {
+  if (typeof method !== "string" || !paymentMethods.some(value => value === method)) throw new Error("Choose a payment method");
+  if (method !== "Other") return method;
+  if (typeof other !== "string" || !other.trim() || other.trim().length > 100) throw new Error("Specify the other payment method (up to 100 characters)");
+  return "Other: " + other.trim();
+}
+export function tokenNumber(value: unknown) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.trim().length > 30) throw new Error("Token number must be up to 30 characters");
+  return value.trim() || null;
+}
 export const money = (paise: number | null) => paise === null ? "Not extracted" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(paise / 100);
 export const billType = (bill: DeskBill) => bill.field_confidence?.document?.billType || bill.bill_type || "Type not identified";
 export const isSupportingNote = (bill: DeskBill) => bill.amount_paise === null

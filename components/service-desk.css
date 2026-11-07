@@ -315,3 +315,6 @@
 
 @media(max-width:900px){.sd-upload-dialog .sd-upload-queue{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:760px){.sd-upload-heading{flex-wrap:wrap;gap:14px}.sd-queue-item{padding:14px}.sd-review-amount strong{font-size:17px}.sd-review-heading{gap:10px}.sd-upload-summary{margin-top:14px}}
+
+.sd-payment-form{display:grid;gap:16px;margin:24px 0;max-width:460px}
+.sd-payment-form>button{justify-self:start}

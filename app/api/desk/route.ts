@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthenticationError, requireStaff, startSession } from "@/lib/supabase-server";
 import { hashPassword } from "@/lib/password";
 import { loadDesk } from "@/lib/desk-session";
+import { paymentMethod } from "@/lib/desk";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "Cache-Control": "no-store" } });
@@ -25,7 +26,8 @@ export async function POST(request: Request) {
       await startSession(response, user.id, passwordHash);
       return response;
     } else if (["approve", "collect", "reverse"].includes(body.action)) {
-      const { error } = await service.rpc("app_desk_action", { staff: user.id, action: body.action, target: body.target, reason: body.reason ?? "" });
+      const method = body.action === "collect" ? paymentMethod(body.method, body.otherMethod) : "";
+      const { error } = await service.rpc("app_desk_action", { staff: user.id, action: body.action, target: body.target, reason: body.reason ?? "", payment_method: method });
       if (error) throw new Error(error.code === "23505" ? "This invoice has already been approved. Open the existing bill." : error.message);
     } else if (body.action === "reextract") {
       if (profile.role !== "super_admin") throw new Error("Super admin role required");

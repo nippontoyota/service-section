@@ -42,6 +42,7 @@ For a new project, apply these SQL files in order through Supabase SQL Editor:
 4. `supabase/migrations/202611040003_app_auth.sql`
 5. `supabase/migrations/202611050001_atomic_upload_confirmation.sql`
 6. `supabase/migrations/202611050002_cashier_mark_paid.sql` (required before deploying the one-step cashier payment flow)
+7. `supabase/migrations/202611070001_payment_method_and_token.sql` — apply before deploying the token and payment-method forms; existing records remain unchanged.
 
 The migrations create the private `bills` storage bucket and the staff, customer, billing, session and audit structures. For a new database only, configure `.env.local` locally and run `npm run bootstrap:staff` once. The documented starter passwords are public; replace them before staff use the public deployment. Existing configured staff accounts do not need another bootstrap.
 

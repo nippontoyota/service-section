@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync, existsSync } from "node:fs";
 import { paise, financialFields } from "./pdf/financial";
 import { extractBills, extractCustomerReference } from "./pdf/extract";
-import { balance, cashierDailyReport, customerKey, groupCustomers, indiaDate, report } from "./desk";
+import { balance, cashierDailyReport, customerKey, groupCustomers, indiaDate, report, paymentMethod, paymentMethods, tokenNumber } from "./desk";
 import { freshDemo, demoAction, upgradeDemo } from "./desk-demo";
 import { fixtureSnapshot } from "./test-fixtures";
 import { importReferenceBills } from "./import-reference-bills";
@@ -34,12 +34,12 @@ test("full bill settlement, retries, reversal and drill-down reconcile", () => {
   const admin = data.staff.find(p => p.role === "super_admin")!;
   const advisor = data.staff.find(p => p.role === "service_advisor")!;
   assert.throws(() => demoAction(data,advisor,"approve","sample-4"));
-  assert.throws(() => demoAction(data,advisor,"collect","sample-4"));
+  assert.throws(() => demoAction(data,advisor, "collect", "sample-4", "", "Cash"));
   data.payments = data.payments.filter(p => p.bill_id !== "sample-0");
   assert.equal(balance(data.bills[0], data.payments),2000000);
-  data = demoAction(data,cashier,"collect","sample-0");
+  data = demoAction(data,cashier, "collect", "sample-0", "", "Cash");
   const count = data.payments.length;
-  data = demoAction(data,cashier,"collect","sample-0");
+  data = demoAction(data,cashier, "collect", "sample-0", "", "Cash");
   assert.equal(data.payments.length,count);
   assert.equal(balance(data.bills[0],data.payments),0);
   const payment = data.payments.at(-1)!;
@@ -53,7 +53,7 @@ test("full bill settlement, retries, reversal and drill-down reconcile", () => {
   assert.equal(summary.paidAmount, 4130500);
   assert.equal(summary.unpaidAmount, 9789200);
   assert.equal(summary.pending.length,2);
-  data = demoAction(data,cashier,"collect","sample-0");
+  data = demoAction(data,cashier, "collect", "sample-0", "", "Cash");
   assert.equal(report(data).paid.length, 2, "Repaid bills count once despite multiple payment entries");
   assert.equal(report(data).unpaid.length, 4);
 });
@@ -102,7 +102,7 @@ test("cashier daily analytics includes pending invoices and tracks their current
   data.payments.push({ ...data.payments[0], id: "archived", bill_id: data.bills[2].id, amount_paise: data.bills[2].amount_paise!, is_archived: true });
   assert.deepEqual(cashierDailyReport(data, day), { bills: 6, paid: 2, unpaid: 4, billedAmount: 12969700, paidAmount: 6130500, unpaidAmount: 6839200, unreadAmounts: 1 });
   const cashier = data.staff.find(p => p.role === "cashier")!;
-  data = demoAction(data, cashier, "collect", bill.id);
+  data = demoAction(data, cashier, "collect", bill.id, "", "Cash");
   // Payment on a later day still settles the invoice in its original day's summary.
   data.payments.at(-1)!.occurred_at = "2026-11-06T18:30:00Z";
   const paid = cashierDailyReport(data, day);
@@ -199,13 +199,42 @@ test("single-step payment rejects incomplete, duplicate and draft bills without 
   for (const change of [{ amount_paise: null }, { invoice_date: null }, { invoice_reference: " " }, { invoice_reference: data.bills[0].invoice_reference }, { uploads: { original_filename: "draft.pdf", confirmed_at: null } }]) {
     const invalid = structuredClone(data);
     Object.assign(invalid.bills.find(b => b.id === bill.id)!, change);
-    assert.throws(() => demoAction(invalid, cashier, "collect", bill.id));
+    assert.throws(() => demoAction(invalid, cashier, "collect", bill.id, "", "Cash"));
     assert.equal(invalid.payments.length, data.payments.length);
     assert.equal(invalid.bills.find(b => b.id === bill.id)!.approval_status, "pending");
   }
   bill.amount_paise = 0;
-  const paid = demoAction(data, cashier, "collect", bill.id);
+  const paid = demoAction(data, cashier, "collect", bill.id, "", "Cash");
   assert.equal(paid.bills.find(b => b.id === bill.id)!.approval_status, "approved");
   assert.equal(paid.payments.length, data.payments.length);
   assert.equal(paid.audit[0].action, "collect");
+});
+
+test("payment methods require a choice and Other requires a description", () => {
+  for (const method of paymentMethods.filter(value => value !== "Other")) {
+    assert.equal(paymentMethod(method, "stale custom value"), method);
+    const data = fixtureSnapshot();
+    const paid = demoAction(data, data.staff.find(p => p.role === "cashier")!, "collect", "sample-4", "", method);
+    assert.equal(paid.payments.at(-1)!.method, method);
+  }
+  for (const method of [undefined, null, "", "Invalid", 123]) assert.throws(() => paymentMethod(method));
+  for (const other of [undefined, null, "", "   ", "x".repeat(101), 123]) assert.throws(() => paymentMethod("Other", other));
+  assert.equal(paymentMethod("Other", "  Bank transfer  "), "Other: Bank transfer");
+  const data = fixtureSnapshot();
+  const cashier = data.staff.find(p => p.role === "cashier")!;
+  assert.throws(() => demoAction(data, cashier, "collect", "sample-4"), /Choose a payment method/);
+  assert.throws(() => demoAction(data, cashier, "collect", "sample-4", "", "Other", "  "), /Specify/);
+  const paid = demoAction(data, cashier, "collect", "sample-4", "", "Other", "Bank transfer");
+  assert.equal(paid.payments.at(-1)!.method, "Other: Bank transfer");
+  assert.equal(paid.audit[0].detail.payment_method, "Other: Bank transfer");
+  const retry = demoAction(paid, cashier, "collect", "sample-4", "", "Cash");
+  assert.deepEqual(retry.payments, paid.payments);
+  const reversed = demoAction(paid, data.staff.find(p => p.role === "super_admin")!, "reverse", paid.payments.at(-1)!.id, "Correction");
+  assert.equal(reversed.payments.at(-1)!.method, "Other: Bank transfer");
+});
+test("manual tokens preserve leading zeros and prefixes and allow unassigned bills", () => {
+  assert.equal(tokenNumber("  0012  "), "0012");
+  assert.equal(tokenNumber("A-012"), "A-012");
+  for (const value of [null, undefined, "", "  "]) assert.equal(tokenNumber(value), null);
+  for (const value of [123, {}, "1".repeat(31)]) assert.throws(() => tokenNumber(value));
 });

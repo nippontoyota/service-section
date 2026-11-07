@@ -50,11 +50,11 @@ test("cashier views include historical pending bills, payment transitions, rever
   const bill = snapshot.bills.find(b => b.id === "sample-4")!; bill.invoice_date = "2020-01-01";
   assert.equal(cashierView(bill, snapshot.payments), "overview");
   assert.equal(cashierView(snapshot.bills.find(b => b.id === "sample-2")!, snapshot.payments), "overview");
-  snapshot = demoAction(snapshot, cashier, "collect", bill.id);
+  snapshot = demoAction(snapshot, cashier, "collect", bill.id, "", "Cash");
   assert.equal(cashierView(snapshot.bills.find(b => b.id === bill.id)!, snapshot.payments), "archive");
   assert.equal(snapshot.bills.find(b => b.id === bill.id)!.approved_by, cashier.id);
   const paymentCount = snapshot.payments.length;
-  snapshot = demoAction(snapshot, cashier, "collect", bill.id);
+  snapshot = demoAction(snapshot, cashier, "collect", bill.id, "", "Cash");
   assert.equal(snapshot.payments.length, paymentCount);
   snapshot = demoAction(snapshot, admin, "reverse", snapshot.payments.at(-1)!.id, "Correction");
   assert.equal(cashierView(snapshot.bills.find(b => b.id === bill.id)!, snapshot.payments), "overview");

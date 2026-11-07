@@ -33,6 +33,7 @@ try {
   await page.locator(".sd-review-card").waitFor();
   assert.match(await page.locator(".sd-review-card").innerText(),/12,759/);
   assert.match(await page.locator(".sd-review-card").innerText(),/TXA24-23030/);
+  await page.getByLabel("Token number (optional)").fill("0012");
   await page.getByRole("button",{name:"Submit all"}).click();
   await page.getByText("0 ready · 0 failed · 0 / 10 PDFs",{exact:true}).waitFor();
   await page.getByRole("button",{name:"Close upload dialog",exact:true}).click();
@@ -42,6 +43,10 @@ try {
   await page.getByRole("button",{name:"Overview",exact:true}).click();
   assert.equal(await page.locator("nav button").count(), 2);
   assert.equal(await page.getByRole("button", {name: /Incoming bills|Unpaid bills/}).count(), 0);
+  assert.match(await page.locator("main").innerText(), /0012/);
+  await page.getByLabel("Search bills").fill("0012");
+  assert.equal(await page.locator(".sd-invoice").count(), 1);
+  await page.getByLabel("Search bills").fill("");
   const dailyAnalytics = page.getByRole("region", {name: "Daily analytics"});
   const invoiceDay = await page.evaluate(() => JSON.parse(localStorage.getItem("service-desk-finance-demo-v1")).bills.find(b => b.invoice_reference === "TXA24-23030").invoice_date);
   const pendingCount = await page.locator(".sd-invoice").count();
@@ -62,7 +67,20 @@ try {
   await page.getByTitle("Original bill PDF").waitFor();
   assert.equal(await page.getByRole("button", {name: "Approve bill", exact: true}).count(), 0);
   await page.getByRole("button",{name:/Mark as paid/}).waitFor();
-  assert.equal(await page.locator("dialog input").count(),0,"Financial details must not be manually entered");
+  assert.match(await page.locator(".sd-details").innerText(), /0012/);
+  assert.equal(await page.getByRole("button",{name:/Mark as paid/}).isDisabled(),true);
+  const method = page.getByLabel("Mode of payment");
+  assert.deepEqual(await method.locator("option").allTextContents(),["Select payment method","Cash","GPay","Cheque","Demand Draft","Other"]);
+  assert.equal(await page.getByLabel("Specify other payment method").count(),0);
+  await method.selectOption("Other");
+  await page.getByLabel("Specify other payment method").fill("   ");
+  assert.equal(await page.getByRole("button",{name:/Mark as paid/}).isDisabled(),true);
+  await page.getByLabel("Specify other payment method").fill("Bank transfer");
+  await method.selectOption("GPay");
+  assert.equal(await page.getByLabel("Specify other payment method").count(),0);
+  await method.selectOption("Other");
+  assert.equal(await page.getByLabel("Specify other payment method").inputValue(),"");
+  await page.getByLabel("Specify other payment method").fill("Bank transfer");
   await page.getByRole("button",{name:/Mark as paid/}).click();
   await page.getByText("Bill marked as paid and moved to Archive.", {exact:true}).waitFor();
   assert.equal(Number(await dailyAnalytics.locator(".sd-metric").nth(1).locator("strong").innerText()), beforePaid + 1);
@@ -72,6 +90,7 @@ try {
   await page.getByRole("button", {name: /^Archive/}).click();
   await page.getByRole("button", {name:"TXA24-23030",exact:true}).click();
   await page.getByText("Full bill collected",{exact:false}).waitFor();
+  assert.match(await page.locator(".sd-payment").innerText(), /Other: Bank transfer/);
   assert.doesNotMatch(await page.locator("dialog").innerText(),/Part paid|Remaining|Method not stated/);
   await page.getByRole("heading",{name:"This customer’s bills"}).waitFor();
   await page.getByRole("button",{name:"Close bill details"}).click();

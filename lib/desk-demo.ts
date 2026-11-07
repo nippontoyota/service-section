@@ -1,4 +1,4 @@
-import { collected, customerKey, type Snapshot, type Staff } from "./desk";
+import { collected, customerKey, paymentMethod, type Snapshot, type Staff } from "./desk";
 export const DEMO_KEY = "service-desk-finance-demo-v1";
 export const demoAccounts = [
   { id: "demo-cashier", staff_id: "cashier01", full_name: "Riya Nair", role: "cashier", password: "CashierDemo!2026" },
@@ -26,11 +26,12 @@ export function upgradeDemo(snapshot: Snapshot): Snapshot {
   next.schema_version = 2;
   return next;
 }
-export function demoAction(snapshot: Snapshot, user: Staff, action: string, target: string, reason = ""): Snapshot {
+export function demoAction(snapshot: Snapshot, user: Staff, action: string, target: string, reason = "", method?: string, otherMethod?: string): Snapshot {
   const next = structuredClone(snapshot);
   if (!user.active) throw new Error("Account disabled");
   let bill = next.bills.find(b => b.id === target);
   const now = new Date().toISOString();
+  const selectedMethod = action === "collect" ? paymentMethod(method, otherMethod) : undefined;
   if (action === "reverse") {
     if (user.role !== "super_admin" || reason.trim().length < 3) throw new Error("Admin and reversal reason required");
     const payment = next.payments.find(p => p.id === target && p.source !== "reversal" && !p.is_archived);
@@ -53,10 +54,10 @@ export function demoAction(snapshot: Snapshot, user: Staff, action: string, targ
       const received = collected(bill, next.payments);
       if (received === bill.amount_paise && alreadyApproved) return next;
       if (received !== 0) throw new Error("Only full-bill collection is supported");
-      if (bill.amount_paise > 0) next.payments.push({ id: crypto.randomUUID(), bill_id: bill.id, amount_paise: bill.amount_paise, method: "not stated", occurred_at: now, recorded_at: now, recorded_by: user.id, source: "cashier", reversal_of: null, reason: null });
+      if (bill.amount_paise > 0) next.payments.push({ id: crypto.randomUUID(), bill_id: bill.id, amount_paise: bill.amount_paise, method: selectedMethod!, occurred_at: now, recorded_at: now, recorded_by: user.id, source: "cashier", reversal_of: null, reason: null });
     }
   }
-  if (bill) next.audit.unshift({ id: crypto.randomUUID(), bill_id: bill.id, actor_id: user.id, action, created_at: now, detail: { target, reason } });
+  if (bill) next.audit.unshift({ id: crypto.randomUUID(), bill_id: bill.id, actor_id: user.id, action, created_at: now, detail: { target, reason, ...(selectedMethod ? { payment_method: selectedMethod } : {}) } });
   next.as_of = now;
   return next;
 }

@@ -248,5 +248,54 @@ await collect(invalidBill);
 assert.equal((await db.query("select status from bills where id=$1",[invalidBill])).rows[0].status,"paid");
 assert.equal((await db.query("select count(*) as n from payments where bill_id=$1",[invalidBill])).rows[0].n,0);
 console.log("Single-step payment passed: approval, full collection, concurrent retries, reversal, validation, duplicate rollback and zero totals.");
+// Payment methods and manual tokens are saved with their existing atomic actions.
+await db.exec("reset role");
+await db.exec(readFileSync("supabase/migrations/202611070001_payment_method_and_token.sql", "utf8"));
+const tokenDraft = await draft("7".repeat(64));
+const tokenBill = (await db.query("select id from bills where upload_id=$1", [tokenDraft])).rows[0].id;
+const tokenSibling = randomUUID();
+await db.query("insert into bills(id,upload_id,uploaded_by,page_from,page_to,connection_key,connection_key_type) values($1,$2,$3,2,2,'test','reference')", [tokenSibling,tokenDraft,advisor]);
+await db.exec("set role service_role");
+const confirmTokens = (tokens, staff = advisor, id = tokenDraft) => db.query("select app_confirm_upload($1,$2,$3::jsonb)", [staff,id,JSON.stringify(tokens)]);
+await assert.rejects(confirmTokens({ [tokenBill]: "0012" }, cashier), /Service advisor/);
+await assert.rejects(confirmTokens({ [tokenBill]: "0012" }, otherAdvisor), /Upload not found/);
+for (const tokens of [[], { [tokenBill]: 12 }, { [tokenBill]: "x".repeat(31) }, { [singleStep]: "12" }]) await assert.rejects(confirmTokens(tokens), /Invalid token/);
+assert.equal((await db.query("select confirmed_at from uploads where id=$1",[tokenDraft])).rows[0].confirmed_at,null);
+await confirmTokens({ [tokenBill]: " 0012 ", [tokenSibling]: "A-013" });
+await confirmTokens({ [tokenBill]: "changed on retry" });
+const tokenSnapshot = (await db.query("select app_desk_snapshot($1) as data",[cashier])).rows[0].data;
+assert.equal(tokenSnapshot.bills.find(b => b.id === tokenBill).token_number,"0012");
+assert.equal(tokenSnapshot.bills.find(b => b.id === tokenSibling).token_number,"A-013");
+assert.equal((await db.query("select detail from audit_events where bill_id=$1 and action='submitted'",[tokenBill])).rows[0].detail.token_number,"0012");
+assert.equal((await db.query("select count(*) as n from audit_events where bill_id=$1 and action='submitted'",[tokenBill])).rows[0].n,1);
+// A duplicate PDF rolls token changes back along with submission.
+const duplicateTokenDraft = await draft("7".repeat(64));
+const duplicateTokenBill = (await db.query("select id from bills where upload_id=$1",[duplicateTokenDraft])).rows[0].id;
+await assert.rejects(confirmTokens({ [duplicateTokenBill]: "99" }, advisor, duplicateTokenDraft), /uploads_confirmed_hash_unique/);
+assert.equal((await db.query("select token_number from bills where id=$1",[duplicateTokenBill])).rows[0].token_number,null);
+await db.query("update bills set amount_paise=12500,invoice_date='2026-11-07' where id=$1",[tokenBill]);
+const payWith = (method, actor = cashier) => db.query("select app_desk_action($1,'collect',$2,'',$3)",[actor,tokenBill,method]);
+await assert.rejects(payWith("Cash",advisor),/Cashier/);
+for (const method of [null,"","Unknown","Other: ","Other: " + "x".repeat(101)]) await assert.rejects(payWith(method),/payment method/);
+await assert.rejects(db.query("select app_desk_action($1,'collect',$2,'')",[cashier,tokenBill]),/payment method/);
+assert.equal((await db.query("select approval_status from bills where id=$1",[tokenBill])).rows[0].approval_status,"pending");
+for (const method of ["Cash","GPay","Cheque","Demand Draft","Other: Bank transfer"]) {
+ await Promise.all([payWith(method),payWith(method)]);
+ const payment = (await db.query("select * from payments where bill_id=$1 and source='cashier' and not exists(select 1 from payments r where r.reversal_of=payments.id)",[tokenBill])).rows;
+ assert.equal(payment.length,1);
+ assert.equal(payment[0].method,method);
+ await payWith("Cash"); // A retry must not replace the original method.
+ assert.equal((await db.query("select method from payments where id=$1",[payment[0].id])).rows[0].method,method);
+ await db.query("select app_desk_action($1,'reverse',$2,'Method test')",[admin,payment[0].id]);
+ assert.equal((await db.query("select method from payments where reversal_of=$1",[payment[0].id])).rows[0].method,method);
+}
+assert.equal((await db.query("select detail from audit_events where bill_id=$1 and action='collect' and detail->>'payment_method'='Other: Bank transfer'",[tokenBill])).rows.length,1);
+for (const role of ["anon","authenticated"]) {
+ await db.exec("reset role; set role " + role);
+ await assert.rejects(payWith("Cash"),/permission denied/);
+ await assert.rejects(confirmTokens({}),/permission denied/);
+ await assert.rejects(db.query("select desk_action('collect',$1,'','Cash')",[tokenBill]),/permission denied/);
+}
+console.log("Payment methods and tokens passed: validation, multi-bill submission, cashier visibility, atomic rollback, retries, all methods, reversals and role restrictions.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");
