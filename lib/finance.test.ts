@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync, existsSync } from "node:fs";
 import { paise, financialFields } from "./pdf/financial";
 import { extractBills, extractCustomerReference } from "./pdf/extract";
-import { balance, cashierDailyReport, customerKey, groupCustomers, indiaDate, report, paymentMethod, paymentMethods, tokenNumber, transactionId } from "./desk";
+import { balance, cashierDailyReport, customerKey, groupCustomers, indiaDate, report, paymentMethod, paymentMethods, tokenNumber, transactionId, paymentReferenceLabel, compareCashierTokens } from "./desk";
 import { freshDemo, demoAction, demoDeleteStaff, upgradeDemo } from "./desk-demo";
 import { fixtureSnapshot } from "./test-fixtures";
 import { importReferenceBills } from "./import-reference-bills";
@@ -277,4 +277,31 @@ test("permanent staff deletion protects admins and retains bill and payment hist
   }
   assert.equal(report(next).paidAmount, report(data).paidAmount);
   assert.equal(report(next).unpaidAmount, report(data).unpaidAmount);
+});
+
+test("payment references only apply to GPay, DD and cheques", () => {
+  assert.equal(paymentReferenceLabel("GPay"), "Transaction ID");
+  assert.equal(paymentReferenceLabel("Demand Draft"), "Transaction ID");
+  assert.equal(paymentReferenceLabel("Cheque"), "Cheque number");
+  for (const method of ["", "Cash", "Other", "Other: Bank transfer"]) assert.equal(paymentReferenceLabel(method), null);
+  const data = fixtureSnapshot();
+  data.payments = [];
+  const cashier = data.staff.find(p => p.role === "cashier")!;
+  for (const method of ["Cash", "GPay", "Cheque", "Demand Draft", "Other"]) {
+    const result = demoAction(data, cashier, "collect", "sample-0", "", method, "Bank transfer", "00123");
+    assert.equal(result.payments[0].transaction_id, ["Cash", "Other"].includes(method) ? null : "00123");
+  }
+});
+test("cashier token order is numeric across customers, with missing tokens last and oldest submissions breaking ties", () => {
+  const bill = fixtureSnapshot().bills[0];
+  const rows = [
+    { ...bill, id: "ten", token_number: "10" },
+    { ...bill, id: "missing", token_number: null },
+    { ...bill, id: "two-later", token_number: "002", uploads: { ...bill.uploads!, confirmed_at: "2026-11-10T10:00:00Z" } },
+    { ...bill, id: "a-ten", token_number: "A10" },
+    { ...bill, id: "two-first", customer_id: "another-customer", token_number: "2", uploads: { ...bill.uploads!, confirmed_at: "2026-11-10T09:00:00Z" } },
+    { ...bill, id: "a-two", token_number: "A2" },
+    { ...bill, id: "one", token_number: "1" },
+  ];
+  assert.deepEqual(rows.sort(compareCashierTokens).map(b => b.id), ["one", "two-first", "two-later", "ten", "a-two", "a-ten", "missing"]);
 });

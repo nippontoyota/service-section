@@ -1,4 +1,4 @@
-import { collected, customerKey, paymentMethod, transactionId, type Snapshot, type Staff } from "./desk";
+import { collected, customerKey, paymentMethod, paymentReferenceLabel, transactionId, type Snapshot, type Staff } from "./desk";
 export const DEMO_KEY = "service-desk-finance-demo-v1";
 export const demoAccounts = [
   { id: "demo-cashier", staff_id: "cashier01", full_name: "Riya Nair", role: "cashier", password: "CashierDemo!2026" },
@@ -31,8 +31,8 @@ export function demoAction(snapshot: Snapshot, user: Staff, action: string, targ
   if (!user.active) throw new Error("Account disabled");
   let bill = next.bills.find(b => b.id === target);
   const now = new Date().toISOString();
-  const selectedTransactionId = action === "collect" ? transactionId(reference) : null;
   const selectedMethod = action === "collect" ? paymentMethod(method, otherMethod) : undefined;
+  const selectedTransactionId = selectedMethod && paymentReferenceLabel(selectedMethod) ? transactionId(reference) : null;
   if (action === "reverse") {
     if (user.role !== "super_admin" || reason.trim().length < 3) throw new Error("Admin and reversal reason required");
     const payment = next.payments.find(p => p.id === target && p.source !== "reversal" && !p.is_archived);

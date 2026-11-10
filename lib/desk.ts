@@ -32,6 +32,10 @@ export function paymentMethod(method: unknown, other: unknown = "") {
   if (typeof other !== "string" || !other.trim() || other.trim().length > 100) throw new Error("Specify the other payment method (up to 100 characters)");
   return "Other: " + other.trim();
 }
+export function paymentReferenceLabel(method: string) {
+  if (method === "Cheque") return "Cheque number";
+  return method === "GPay" || method === "Demand Draft" ? "Transaction ID" : null;
+}
 export function transactionId(value: unknown) {
   if (value === undefined || value === null) return null;
   if (typeof value !== "string" || value.trim().length > 100) throw new Error("Transaction ID must be up to 100 characters");
@@ -88,6 +92,16 @@ export function cashierView(bill: DeskBill, payments: Payment[]) {
   if (!bill.uploads?.confirmed_at) return null;
   if (isSupportingNote(bill) || isPaid(bill, payments)) return "archive";
   return "overview";
+}
+
+const tokenOrder = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+export function compareCashierTokens(a: DeskBill, b: DeskBill) {
+  const first = a.token_number?.trim() || "";
+  const second = b.token_number?.trim() || "";
+  if (Boolean(first) !== Boolean(second)) return first ? -1 : 1;
+  return tokenOrder.compare(first, second)
+    || Date.parse(a.uploads?.confirmed_at || a.created_at) - Date.parse(b.uploads?.confirmed_at || b.created_at)
+    || a.id.localeCompare(b.id);
 }
 
 export function cashierDailyReport(snapshot: Snapshot, day: string) {

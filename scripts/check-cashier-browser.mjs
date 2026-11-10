@@ -1,0 +1,84 @@
+// Run npm test first, then point DESK_URL at a development-only demo server.
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { fixtureSnapshot } = require("/tmp/cashier-bill-tests/test-fixtures.js");
+const { chromium } = await import(process.env.PLAYWRIGHT_PATH ? process.env.PLAYWRIGHT_PATH + "/index.mjs" : "playwright");
+const base = process.env.DESK_URL || "http://localhost:3118";
+assert(["localhost", "127.0.0.1"].includes(new URL(base).hostname), "Use a local demo server");
+const snapshot = fixtureSnapshot();
+snapshot.payments = [];
+snapshot.bills.forEach((bill, index) => {
+  bill.id = "ui-" + bill.id;
+  bill.token_number = ["10", "2", "1", "3", null, "002"][index];
+  bill.uploads.confirmed_at = `2026-11-10T09:0${index}:00Z`;
+});
+const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
+const page = await browser.newPage();
+const errors = [];
+page.on("pageerror", error => errors.push(error.message));
+await page.route("**/api/demo/reference-bills", route => route.fulfill({ json: { bills: [] } }));
+await page.addInitScript(data => {
+  if (!localStorage.getItem("cashier-test-seeded")) {
+    localStorage.setItem("service-desk-finance-demo-v1", JSON.stringify(data));
+    localStorage.setItem("cashier-test-seeded", "true");
+  }
+}, snapshot);
+try {
+  await page.goto(base);
+  await page.getByText("Try a workspace", { exact: true }).waitFor();
+  await page.getByLabel("User ID", { exact: true }).fill("cashier01");
+  await page.getByLabel("Password", { exact: true }).fill("CashierDemo!2026");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Sign out", exact: true }).waitFor();
+  const invoices = page.locator(".sd-invoice");
+  assert.deepEqual(await invoices.allTextContents(), ["DEMO-2602", "DEMO-2601", "DEMO-2605", "DEMO-2603", "DEMO-2600", "DEMO-2604"]);
+  await page.getByLabel("Search bills").fill("DEMO-260");
+  assert.deepEqual(await invoices.allTextContents(), ["DEMO-2602", "DEMO-2601", "DEMO-2605", "DEMO-2603", "DEMO-2600", "DEMO-2604"]);
+  await page.getByRole("button", { name: "DEMO-2602", exact: true }).click();
+  const mode = page.getByLabel("Mode of payment");
+  const transaction = page.getByLabel("Transaction ID (optional)");
+  const cheque = page.getByLabel("Cheque number (optional)");
+  assert.equal(await transaction.count(), 0);
+  assert.equal(await cheque.count(), 0);
+  await mode.selectOption("Cash");
+  assert.equal(await transaction.count(), 0);
+  await mode.selectOption("GPay");
+  await transaction.fill("00123-GPAY");
+  await mode.selectOption("Demand Draft");
+  assert.equal(await transaction.inputValue(), "");
+  await transaction.fill("00123-DD");
+  await mode.selectOption("Cheque");
+  assert.equal(await transaction.count(), 0);
+  assert.equal(await cheque.inputValue(), "");
+  await cheque.fill("001234");
+  await mode.selectOption("Other");
+  assert.equal(await transaction.count(), 0);
+  assert.equal(await cheque.count(), 0);
+  await page.getByLabel("Specify other payment method").fill("Bank transfer");
+  await mode.selectOption("Cheque");
+  assert.equal(await cheque.inputValue(), "");
+  await cheque.fill("001234");
+  await page.getByRole("button", { name: /Mark as paid/ }).click();
+  await page.getByText("Bill marked as paid and moved to Archive.", { exact: true }).waitFor();
+  assert.deepEqual(await invoices.allTextContents(), ["DEMO-2601", "DEMO-2605", "DEMO-2603", "DEMO-2600", "DEMO-2604"]);
+  await page.getByRole("button", { name: /^Archive/ }).click();
+  await page.getByRole("button", { name: "DEMO-2602", exact: true }).click();
+  await page.getByText("Cheque number: 001234", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close bill details", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "DEMO-2601", exact: true }).click();
+  await mode.selectOption("GPay");
+  await transaction.fill("stale-reference");
+  await mode.selectOption("Cash");
+  assert.equal(await transaction.count(), 0);
+  await page.getByRole("button", { name: /Mark as paid/ }).click();
+  await page.getByText("Bill marked as paid and moved to Archive.", { exact: true }).waitFor();
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("service-desk-finance-demo-v1")));
+  assert.equal(saved.payments.find(p => p.bill_id === "ui-sample-1").transaction_id, null);
+  assert.equal(saved.payments.find(p => p.bill_id === "ui-sample-2").transaction_id, "001234");
+  assert.deepEqual(errors, []);
+  console.log("Cashier browser passed: numeric token order across customers/search/payment, conditional fields, cleared references, cheque history and cash without a reference.");
+} finally {
+  await browser.close();
+}
