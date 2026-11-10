@@ -77,7 +77,7 @@ export async function POST(request: Request) {
         if (body.action === "create_staff") {
           if (!/^[a-z0-9_]{3,40}$/.test(body.staffId ?? "") || !["cashier","service_advisor","super_admin"].includes(body.role) || typeof body.fullName !== "string" || !body.fullName.trim() || body.fullName.length > 100) throw new Error("Valid user ID, name and role required");
         }
-        const passwordHash = await hashPassword(temporaryPassword ?? body.password);
+        const passwordHash = await hashPassword(temporaryPassword ?? body.password, body.action === "create_staff" ? 8 : 128);
         const { error } = await service.rpc("app_staff_account", {
           actor: user.id, operation: body.action, target: body.target ?? null, new_hash: passwordHash,
           login_id: body.staffId ?? null, name: body.fullName ?? null, role_name: body.role ?? null,

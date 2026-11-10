@@ -8,8 +8,8 @@ const derive = (password: string, salt: string) => new Promise<Buffer>((resolve,
   });
 });
 
-export async function hashPassword(password: string) {
-  if (typeof password !== "string" || password.length < 12 || password.length > 128) throw new Error("Use a password between 12 and 128 characters");
+export async function hashPassword(password: string, maxLength = 128) {
+  if (typeof password !== "string" || password.length < 6 || password.length > maxLength) throw new Error(`Use a password between 6 and ${maxLength} characters`);
   const salt = randomBytes(16).toString("hex");
   return `${prefix}$${salt}$${(await derive(password, salt)).toString("hex")}`;
 }

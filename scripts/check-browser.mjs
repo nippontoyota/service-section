@@ -133,13 +133,15 @@ try {
   await page.getByRole("button",{name:"Staff accounts",exact:true}).click();
   await page.getByLabel("Full name",{exact:true}).fill("New advisor");
   await page.getByLabel("User ID",{exact:true}).fill("advisor02");
-  await page.getByLabel("Password",{exact:true}).fill("ChosenAdvisor!2026");
+  assert.equal(await page.getByLabel("Password",{exact:true}).getAttribute("minlength"), "6");
+  assert.equal(await page.getByLabel("Password",{exact:true}).getAttribute("maxlength"), "8");
+  await page.getByLabel("Password",{exact:true}).fill("abcdef");
   await page.getByRole("button",{name:"Create account",exact:true}).click();
   await page.getByRole("cell").filter({hasText:"New advisor"}).waitFor();
   assert.equal(await page.getByLabel("Password",{exact:true}).inputValue(), "");
   assert.equal(await page.locator(".sd-alert code").count(), 0);
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
-  await login("advisor02","ChosenAdvisor!2026");
+  await login("advisor02","abcdef");
   await page.getByRole("heading",{name:"The bill archive."}).waitFor();
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
   await login("admin01","AdminDemo!2026");

@@ -16,10 +16,21 @@ test("passwords use independent salts and reject wrong, malformed and oversized 
   await assert.rejects(hashPassword("short"));
   await assert.rejects(hashPassword("x".repeat(129)));
   for (const invalid of [undefined, null, 123, {}]) {
-    await assert.rejects(hashPassword(invalid as string), /between 12 and 128/);
+    await assert.rejects(hashPassword(invalid as string), /between 6 and 128/);
   }
   assert.equal(hashSessionToken("token").length, 64);
   assert.notEqual(hashSessionToken("token"), hashSessionToken("other"));
+});
+
+test("admin-created passwords accept any characters at 6–8 characters", async () => {
+  for (const password of ["abcdef", "1234567", "!@#$%^&*", " a b c ", "密码密码密码"]) {
+    const hash = await hashPassword(password, 8);
+    assert.equal(await verifyPassword(password, hash), true);
+    assert.equal(await verifyPassword(password + "x", hash), false);
+  }
+  for (const invalid of [undefined, null, 123456, {}, "", "abcde", "abcdefghi"]) {
+    await assert.rejects(hashPassword(invalid as string, 8), /between 6 and 8/);
+  }
 });
 
 test("bootstrap hashes match the three requested initial passwords", async () => {
