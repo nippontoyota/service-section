@@ -90,3 +90,9 @@ PDF link responses include `uploadId`, `expiresAt`, and authorization/signing du
 - [Vercel project configuration](https://vercel.com/docs/project-configuration/vercel-json)
 - [Function duration configuration](https://vercel.com/docs/functions/configuring-functions/duration)
 - [Next.js output file tracing](https://nextjs.org/docs/app/api-reference/config/next-config-js/output)
+
+## Admin-chosen staff passwords
+
+Apply `supabase/migrations/202611100001_admin_chosen_password.sql` before deploying this version. Admins enter a user ID and a 12–128 character password for any staff role. New accounts can sign in immediately; password resets continue to require a first-login password change. Only salted hashes are stored in the shared database.
+
+For the one-time production cleanup, `node --env-file=.env.local scripts/reset-production.mjs` previews the configured project and record counts. With `--apply`, it backs up database records and every object in the `bills` bucket under the ignored, private `output/production-reset-<timestamp>/` directory, then removes bill data and all staff except the active `admin01` account. Its password stays unchanged; existing sessions are revoked. Keep app traffic stopped during the reset. The backup's `database.json` maps each numbered PDF to its original storage path. The reset is separate from migrations and never runs during deployment.

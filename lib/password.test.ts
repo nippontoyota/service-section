@@ -14,6 +14,10 @@ test("passwords use independent salts and reject wrong, malformed and oversized 
   assert.equal(await verifyPassword("x".repeat(129), first), false);
   assert.equal(await verifyPassword(password, dummyPasswordHash), false);
   await assert.rejects(hashPassword("short"));
+  await assert.rejects(hashPassword("x".repeat(129)));
+  for (const invalid of [undefined, null, 123, {}]) {
+    await assert.rejects(hashPassword(invalid as string), /between 12 and 128/);
+  }
   assert.equal(hashSessionToken("token").length, 64);
   assert.notEqual(hashSessionToken("token"), hashSessionToken("other"));
 });

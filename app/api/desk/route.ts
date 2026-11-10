@@ -73,17 +73,17 @@ export async function POST(request: Request) {
         const { error } = await service.rpc("app_staff_account", { actor: user.id, operation: body.action, target: body.target, enabled: body.active });
         if (error) throw error;
       } else {
-        const temporaryPassword = randomBytes(18).toString("base64url") + "!a9";
-        const passwordHash = await hashPassword(temporaryPassword);
+        const temporaryPassword = body.action === "reset_staff" ? randomBytes(18).toString("base64url") + "!a9" : undefined;
         if (body.action === "create_staff") {
           if (!/^[a-z0-9_]{3,40}$/.test(body.staffId ?? "") || !["cashier","service_advisor","super_admin"].includes(body.role) || typeof body.fullName !== "string" || !body.fullName.trim() || body.fullName.length > 100) throw new Error("Valid user ID, name and role required");
         }
+        const passwordHash = await hashPassword(temporaryPassword ?? body.password);
         const { error } = await service.rpc("app_staff_account", {
           actor: user.id, operation: body.action, target: body.target ?? null, new_hash: passwordHash,
           login_id: body.staffId ?? null, name: body.fullName ?? null, role_name: body.role ?? null,
         });
         if (error) throw error;
-        return json({ temporaryPassword });
+        return json(temporaryPassword ? { temporaryPassword } : { ok: true });
       }
     } else throw new Error("Unknown action");
     return json({ ok: true });

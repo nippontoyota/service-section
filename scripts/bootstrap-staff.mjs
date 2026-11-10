@@ -14,4 +14,4 @@ for (const [staffId, fullName, role, passwordHash] of [
   if (error) throw new Error("Apply 202611040003_app_auth.sql first. Bootstrap failed: " + error.message);
   console.log(staffId + (data ? ": initial password hash installed." : ": already configured; password unchanged."));
 }
-console.log("Initial accounts are ready. Admin-created accounts still use temporary passwords and must change them at first login.");
+console.log("Initial accounts are ready. Admin-created accounts use the password chosen by the admin. Password resets require a change at first login.");

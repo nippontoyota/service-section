@@ -76,6 +76,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   }, [clearPreviews, demo]);
   const [showPassword, setShowPassword] = useState(false);
   const [staffPassword, setStaffPassword] = useState("");
+  const staffForm = useRef<HTMLFormElement>(null);
 
   const api = useCallback(async (url: string, body?: unknown) => {
     const response = await fetch(url, { method: body ? "POST" : "GET", credentials: "same-origin", headers: {
@@ -189,16 +190,18 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
           const passwords = JSON.parse(localStorage.getItem("desk-demo-passwords") || "{}");
           let target = snapshot.staff.find(p => p.id === body.target);
           if (body.action === "create_staff") {
+            if (typeof body.password !== "string" || body.password.length < 12 || body.password.length > 128) throw new Error("Use a password between 12 and 128 characters");
             if (snapshot.staff.some(p => p.staff_id === body.staffId)) throw new Error("User ID already exists");
-            target = { id: crypto.randomUUID(), staff_id: String(body.staffId), full_name: String(body.fullName), role: body.role as Staff["role"], active: true, must_change_password: true };
+            target = { id: crypto.randomUUID(), staff_id: String(body.staffId), full_name: String(body.fullName), role: body.role as Staff["role"], active: true, must_change_password: false };
             snapshot.staff.push(target);
           }
           if (!target || target.id === current.id) throw new Error("Select another staff account");
           if (body.action === "toggle_staff") target.active = Boolean(body.active);
           else {
-            const password = "Demo!" + crypto.randomUUID().slice(0,16);
-            passwords[target.staff_id] = password; target.must_change_password = true;
-            localStorage.setItem("desk-demo-passwords", JSON.stringify(passwords)); setStaffPassword(target.staff_id + " · " + password);
+            const password = body.action === "create_staff" ? body.password : "Demo!" + crypto.randomUUID().slice(0,16);
+            passwords[target.staff_id] = password; target.must_change_password = body.action === "reset_staff";
+            localStorage.setItem("desk-demo-passwords", JSON.stringify(passwords));
+            if (body.action === "reset_staff") setStaffPassword(target.staff_id + " · " + password);
           }
           snapshot.audit.unshift({ id: crypto.randomUUID(), bill_id: null, actor_id: current.id, action: body.action, created_at: new Date().toISOString(), detail: { target: target.id } });
           save(snapshot);
@@ -211,6 +214,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       if (body.action === "collect") {
         pdfRequest.current++; setSelectedId(null); setPdfUrl(""); setPdfLoading(false); setPdfError("");
       }
+      if (body.action === "create_staff") { staffForm.current?.reset(); setStaffPassword(""); }
       setNotice(body.action === "collect" ? "Bill marked as paid and moved to Archive." : "Saved successfully.");
     });
   }
@@ -456,8 +460,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       {refreshError && <div className="sd-notice" role="alert">{refreshError}<button disabled={busy} onClick={() => void perform(refresh)}>Retry refresh</button></div>}
       {notice && <div className="sd-notice" role="status">{notice}<button aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}
       {tab === "staff" && profile.role === "super_admin" ? <section className="sd-panel">
-        <h2>Create a staff account</h2><form className="sd-staff-form" onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void action({ action: "create_staff", staffId: f.get("staffId"), fullName: f.get("fullName"), role: f.get("role") }); }}>
-          <label>Full name<input name="fullName" maxLength={100} required/></label><label>User ID<input name="staffId" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Role<select name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
+        <h2>Create a staff account</h2><form ref={staffForm} className="sd-staff-form" onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void action({ action: "create_staff", staffId: f.get("staffId"), fullName: f.get("fullName"), role: f.get("role"), password: f.get("password") }); }}>
+          <label>Full name<input name="fullName" maxLength={100} required/></label><label>User ID<input name="staffId" autoComplete="off" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Password<input name="password" type="password" minLength={12} maxLength={128} placeholder="12–128 characters" autoComplete="new-password" required/></label><label>Role<select name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
         </form>{staffPassword && <div className="sd-alert"><strong>Share privately; shown for this session only.</strong><p><code>{staffPassword}</code></p><button onClick={() => setStaffPassword("")}>Dismiss</button></div>}
         <div className="sd-table-wrap"><table><thead><tr><th>Name / User ID</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{data.staff.map(p => <tr key={p.id}><td><strong>{p.full_name}</strong><small>{p.staff_id}</small></td><td>{labels[p.role]}</td><td>{p.active ? "Active" : "Disabled"}{p.must_change_password ? " · Temporary password" : ""}</td><td>{p.id !== profile.id && <div className="sd-actions"><button disabled={busy} onClick={() => void action({ action: "reset_staff", target: p.id })}>Reset password</button><button disabled={busy} onClick={() => void action({ action: "toggle_staff", target: p.id, active: !p.active })}>{p.active ? "Disable" : "Enable"}</button></div>}</td></tr>)}</tbody></table></div>
       </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>

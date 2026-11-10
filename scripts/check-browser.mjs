@@ -133,14 +133,13 @@ try {
   await page.getByRole("button",{name:"Staff accounts",exact:true}).click();
   await page.getByLabel("Full name",{exact:true}).fill("New advisor");
   await page.getByLabel("User ID",{exact:true}).fill("advisor02");
+  await page.getByLabel("Password",{exact:true}).fill("ChosenAdvisor!2026");
   await page.getByRole("button",{name:"Create account",exact:true}).click();
-  await page.getByText("Share privately; shown for this session only.").waitFor();
-  const temporary=(await page.locator(".sd-alert code").innerText()).split(" · ")[1];
+  await page.getByRole("cell").filter({hasText:"New advisor"}).waitFor();
+  assert.equal(await page.getByLabel("Password",{exact:true}).inputValue(), "");
+  assert.equal(await page.locator(".sd-alert code").count(), 0);
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
-  await login("advisor02",temporary);
-  await page.getByRole("heading",{name:"Set your own password."}).waitFor();
-  await page.getByLabel("New password",{exact:true}).fill("NewAdvisor!2026");
-  await page.getByRole("button",{name:"Save password",exact:true}).click();
+  await login("advisor02","ChosenAdvisor!2026");
   await page.getByRole("heading",{name:"The bill archive."}).waitFor();
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
   await login("admin01","AdminDemo!2026");
@@ -154,5 +153,5 @@ try {
   await page.screenshot({path:"/tmp/desk-mobile.png",fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,"Page must fit mobile width");
   assert.deepEqual(errors,[]);
-  console.log("Browser checks passed: upload, extracted amount, PDF preview, one-step payment and archive, admin drill-down, reversal, staff creation, first-login password change and mobile layout.");
+  console.log("Browser checks passed: upload, extracted amount, PDF preview, one-step payment and archive, admin drill-down, reversal, staff creation with admin-chosen password and mobile layout.");
 } finally { await browser.close(); }

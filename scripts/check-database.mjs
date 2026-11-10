@@ -297,5 +297,23 @@ for (const role of ["anon","authenticated"]) {
  await assert.rejects(db.query("select desk_action('collect',$1,'','Cash')",[tokenBill]),/permission denied/);
 }
 console.log("Payment methods and tokens passed: validation, multi-bill submission, cashier visibility, atomic rollback, retries, all methods, reversals and role restrictions.");
+// Admin-chosen passwords work immediately for every supported role.
+await db.exec("reset role");
+await db.exec(readFileSync("supabase/migrations/202611100001_admin_chosen_password.sql", "utf8"));
+await db.exec("set role service_role");
+for (const role of ["service_advisor", "cashier", "super_admin"]) {
+ const id = (await db.query("select app_staff_account($1,'create_staff',null,$2,$3,'Chosen Password Staff',$4) as id",[admin,newHash,"chosen_"+role,role])).rows[0].id;
+ const profile = (await db.query("select * from profiles where id=$1",[id])).rows[0];
+ assert.equal(profile.role, role);
+ assert.equal(profile.must_change_password, false);
+ assert.equal((await db.query("select password_hash from staff_credentials where staff_id=$1",[id])).rows[0].password_hash,newHash);
+ await db.query("select app_desk_snapshot($1)",[id]);
+ await db.query("select app_staff_account($1,'reset_staff',$2,$3)",[admin,id,hash]);
+ assert.equal((await db.query("select must_change_password from profiles where id=$1",[id])).rows[0].must_change_password,true);
+}
+await assert.rejects(db.query("select app_staff_account($1,'create_staff',null,$2,'forbidden','Forbidden','super_admin')",[cashier,newHash]),/Super admin/);
+await assert.rejects(db.query("select app_staff_account($1,'create_staff',null,'plaintext','invalid_hash','Invalid','cashier')",[admin]),/check constraint/);
+assert.equal((await db.query("select count(*) as n from profiles where staff_id='invalid_hash'")).rows[0].n,0);
+console.log("Admin-chosen passwords passed: all roles, immediate access, hash validation, reset behavior and admin authorization.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

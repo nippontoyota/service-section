@@ -129,7 +129,7 @@
 .sd-preview>div{padding:14px 0;border-bottom:1px solid var(--sd-line)}
 .sd-preview strong{font-size:14px}
 .sd-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.sd-staff-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;align-items:end;gap:15px;margin:22px 0 30px}
+.sd-staff-form{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;align-items:end;gap:15px;margin:22px 0 30px}
 .sd-audit-row{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--sd-line);padding:17px 0;font-size:12px}
 .sd-audit-row>div{flex:1}
 .sd-dialog{width:min(900px,calc(100% - 32px));max-height:90dvh;overflow-y:auto;overflow-wrap:anywhere;border:1px solid var(--sd-line);border-radius:15px;padding:35px;color:var(--sd-ink);box-shadow:0 20px 100px #20212430}
