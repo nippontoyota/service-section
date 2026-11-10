@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { readFileSync, existsSync } from "node:fs";
 import { paise, financialFields } from "./pdf/financial";
 import { extractBills, extractCustomerReference } from "./pdf/extract";
-import { balance, cashierDailyReport, customerKey, groupCustomers, indiaDate, report, paymentMethod, paymentMethods, tokenNumber } from "./desk";
-import { freshDemo, demoAction, upgradeDemo } from "./desk-demo";
+import { balance, cashierDailyReport, customerKey, groupCustomers, indiaDate, report, paymentMethod, paymentMethods, tokenNumber, transactionId } from "./desk";
+import { freshDemo, demoAction, demoDeleteStaff, upgradeDemo } from "./desk-demo";
 import { fixtureSnapshot } from "./test-fixtures";
 import { importReferenceBills } from "./import-reference-bills";
 import { parseReferenceBills } from "./reference-bills";
@@ -237,4 +237,44 @@ test("manual tokens preserve leading zeros and prefixes and allow unassigned bil
   assert.equal(tokenNumber("A-012"), "A-012");
   for (const value of [null, undefined, "", "  "]) assert.equal(tokenNumber(value), null);
   for (const value of [123, {}, "1".repeat(31)]) assert.throws(() => tokenNumber(value));
+});
+
+test("transaction IDs preserve leading zeros through retries and reversals", () => {
+  assert.equal(transactionId(" 0012-ABC "), "0012-ABC");
+  for (const value of [undefined, null, "", "   "]) assert.equal(transactionId(value), null);
+  for (const value of [123, {}, "x".repeat(101)]) assert.throws(() => transactionId(value), /Transaction ID/);
+  let data = fixtureSnapshot();
+  const cashier = data.staff.find(p => p.role === "cashier")!;
+  const admin = data.staff.find(p => p.role === "super_admin")!;
+  data.payments = data.payments.filter(p => p.bill_id !== "sample-0");
+  data = demoAction(data, cashier, "collect", "sample-0", "", "GPay", "", " 0012-ABC ");
+  const payment = data.payments.at(-1)!;
+  assert.equal(payment.transaction_id, "0012-ABC");
+  assert.equal(data.audit[0].detail.transaction_id, "0012-ABC");
+  data = demoAction(data, cashier, "collect", "sample-0", "", "Cash", "", "replacement");
+  assert.equal(data.payments.at(-1)!.transaction_id, "0012-ABC");
+  data = demoAction(data, admin, "reverse", payment.id, "Wrong invoice");
+  assert.equal(data.payments.at(-1)!.transaction_id, "0012-ABC");
+});
+test("permanent staff deletion protects admins and retains bill and payment history", () => {
+  const data = fixtureSnapshot();
+  const admin = data.staff.find(p => p.role === "super_admin")!;
+  const cashier = data.staff.find(p => p.role === "cashier")!;
+  assert.throws(() => demoDeleteStaff(data, cashier, admin.id), /Super admin/);
+  assert.throws(() => demoDeleteStaff(data, admin, admin.id), /cannot be deleted/);
+  const anotherAdmin = { ...admin, id: "another-admin", staff_id: "another_admin" };
+  data.staff.push(anotherAdmin);
+  assert.throws(() => demoDeleteStaff(data, anotherAdmin, admin.id), /cannot be deleted/);
+  assert.throws(() => demoDeleteStaff(data, admin, "missing"), /not found/);
+  const next = demoDeleteStaff(data, admin, cashier.id);
+  assert.ok(!next.staff.some(p => p.id === cashier.id));
+  assert.equal(next.bills.length, data.bills.length);
+  assert.equal(next.payments.length, data.payments.length);
+  assert.ok(next.payments.every(p => p.recorded_by !== cashier.id));
+  assert.equal(next.audit[0].action, "delete_staff");
+  for (const metric of ["paid", "unpaid", "pending"] as const) {
+    assert.deepEqual(report(next)[metric].map(b => b.id), report(data)[metric].map(b => b.id));
+  }
+  assert.equal(report(next).paidAmount, report(data).paidAmount);
+  assert.equal(report(next).unpaidAmount, report(data).unpaidAmount);
 });

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthenticationError, requireStaff, startSession } from "@/lib/supabase-server";
 import { hashPassword } from "@/lib/password";
 import { loadDesk } from "@/lib/desk-session";
-import { paymentMethod } from "@/lib/desk";
+import { paymentMethod, transactionId } from "@/lib/desk";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "Cache-Control": "no-store" } });
@@ -27,7 +27,9 @@ export async function POST(request: Request) {
       return response;
     } else if (["approve", "collect", "reverse"].includes(body.action)) {
       const method = body.action === "collect" ? paymentMethod(body.method, body.otherMethod) : "";
-      const { error } = await service.rpc("app_desk_action", { staff: user.id, action: body.action, target: body.target, reason: body.reason ?? "", payment_method: method });
+      const reference = body.action === "collect" ? transactionId(body.transactionId) : null;
+      const { error } = await service.rpc("app_desk_action", { staff: user.id, action: body.action, target: body.target, reason: body.reason ?? "", payment_method: method, ...(reference ? { transaction_id: reference } : {}) });
+      if (error?.code === "PGRST202") throw new Error("Transaction IDs require the latest database migration. Ask your administrator to apply it.");
       if (error) throw new Error(error.code === "23505" ? "This invoice has already been approved. Open the existing bill." : error.message);
     } else if (body.action === "reextract") {
       if (profile.role !== "super_admin") throw new Error("Super admin role required");
@@ -65,10 +67,13 @@ export async function POST(request: Request) {
       const response = json({ url: data.signedUrl, uploadId: bill.upload_id, expiresAt, timings: { authorization, signing } });
       response.headers.set("Server-Timing", `authorization;dur=${authorization.toFixed(1)}, signing;dur=${signing.toFixed(1)}`);
       return response;
-    } else if (["create_staff", "reset_staff", "toggle_staff"].includes(body.action)) {
+    } else if (["create_staff", "reset_staff", "toggle_staff", "delete_staff"].includes(body.action)) {
       if (profile.role !== "super_admin") throw new Error("Super admin role required");
-      if (body.target === user.id) throw new Error("You cannot disable or reset your own account here.");
-      if (body.action === "toggle_staff") {
+      if (body.target === user.id) throw new Error("You cannot delete, disable or reset your own account here.");
+      if (body.action === "delete_staff") {
+        const { error } = await service.rpc("app_delete_staff", { actor: user.id, target: body.target });
+        if (error) throw new Error(error.code === "PGRST202" ? "Account deletion requires the latest database migration. Ask your administrator to apply it." : error.message);
+      } else if (body.action === "toggle_staff") {
         if (typeof body.active !== "boolean") throw new Error("Account status required");
         const { error } = await service.rpc("app_staff_account", { actor: user.id, operation: body.action, target: body.target, enabled: body.active });
         if (error) throw error;

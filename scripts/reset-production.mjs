@@ -32,13 +32,24 @@ async function objects(prefix = "") {
     if (data.length < 100) return all;
   }
 }
+async function authUsers() {
+  const all = [];
+  for (let page = 1; ; page++) {
+    const { data, error } = await service.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw new Error(`Legacy Auth accounts: ${error.message}`);
+    all.push(...data.users);
+    if (data.users.length < 1000) return all;
+  }
+}
 const snapshot = {};
 for (const table of tables) snapshot[table] = await rows(table);
 const admin = snapshot.profiles.find(p => p.staff_id === "admin01" && p.role === "super_admin" && p.active && !p.must_change_password);
 if (!admin || !snapshot.staff_credentials.some(c => c.staff_id === admin.id)) throw new Error("A usable admin01 account is required; nothing deleted.");
 const paths = await objects();
+const legacyAuthUsers = await authUsers();
 console.log("Project:", new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname);
 console.log("Keep:", admin.staff_id);
+console.log("Remove legacy Auth accounts:", legacyAuthUsers.filter(u => u.id !== admin.id).length);
 console.log("Remove accounts:", snapshot.profiles.filter(p => p.id !== admin.id).map(p => p.staff_id));
 console.log("Current records:", Object.fromEntries(tables.map(t => [t, snapshot[t].length])), "Stored PDFs:", paths.length);
 if (!apply) {
@@ -48,7 +59,7 @@ if (!apply) {
 
 const backup = resolve("output", "production-reset-" + new Date().toISOString().replaceAll(":", "-"));
 await mkdir(backup, { recursive: true, mode: 0o700 });
-await writeFile(resolve(backup, "database.json"), JSON.stringify({ project: new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname, snapshot, paths }, null, 2), { mode: 0o600 });
+await writeFile(resolve(backup, "database.json"), JSON.stringify({ project: new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname, snapshot, paths, legacyAuthUsers }, null, 2), { mode: 0o600 });
 for (const [index, path] of paths.entries()) {
   let { data, error } = await service.storage.from("bills").download(path);
   for (let attempt = 0; error && attempt < 2; attempt++) {
@@ -78,6 +89,11 @@ for (let i = 0; i < paths.length; i += 100) {
   const { error } = await service.storage.from("bills").remove(paths.slice(i, i + 100));
   if (error) throw new Error(`PDF deletion failed: ${error.message}. Backup: ${backup}`);
 }
+for (const user of legacyAuthUsers.filter(u => u.id !== admin.id)) {
+  const { error } = await service.auth.admin.deleteUser(user.id);
+  if (error) throw new Error(`Legacy Auth deletion failed: ${error.message}. Backup: ${backup}`);
+}
+if ((await authUsers()).some(u => u.id !== admin.id)) throw new Error("Unexpected remaining legacy Auth accounts.");
 const remaining = await rows("profiles");
 if (remaining.length !== 1 || remaining[0].id !== admin.id) throw new Error("Unexpected remaining staff accounts.");
 const credentials = await rows("staff_credentials");

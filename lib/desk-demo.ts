@@ -1,4 +1,4 @@
-import { collected, customerKey, paymentMethod, type Snapshot, type Staff } from "./desk";
+import { collected, customerKey, paymentMethod, transactionId, type Snapshot, type Staff } from "./desk";
 export const DEMO_KEY = "service-desk-finance-demo-v1";
 export const demoAccounts = [
   { id: "demo-cashier", staff_id: "cashier01", full_name: "Riya Nair", role: "cashier", password: "CashierDemo!2026" },
@@ -26,11 +26,12 @@ export function upgradeDemo(snapshot: Snapshot): Snapshot {
   next.schema_version = 2;
   return next;
 }
-export function demoAction(snapshot: Snapshot, user: Staff, action: string, target: string, reason = "", method?: string, otherMethod?: string): Snapshot {
+export function demoAction(snapshot: Snapshot, user: Staff, action: string, target: string, reason = "", method?: string, otherMethod?: string, reference?: unknown): Snapshot {
   const next = structuredClone(snapshot);
   if (!user.active) throw new Error("Account disabled");
   let bill = next.bills.find(b => b.id === target);
   const now = new Date().toISOString();
+  const selectedTransactionId = action === "collect" ? transactionId(reference) : null;
   const selectedMethod = action === "collect" ? paymentMethod(method, otherMethod) : undefined;
   if (action === "reverse") {
     if (user.role !== "super_admin" || reason.trim().length < 3) throw new Error("Admin and reversal reason required");
@@ -54,11 +55,29 @@ export function demoAction(snapshot: Snapshot, user: Staff, action: string, targ
       const received = collected(bill, next.payments);
       if (received === bill.amount_paise && alreadyApproved) return next;
       if (received !== 0) throw new Error("Only full-bill collection is supported");
-      if (bill.amount_paise > 0) next.payments.push({ id: crypto.randomUUID(), bill_id: bill.id, amount_paise: bill.amount_paise, method: selectedMethod!, occurred_at: now, recorded_at: now, recorded_by: user.id, source: "cashier", reversal_of: null, reason: null });
+      if (bill.amount_paise > 0) next.payments.push({ id: crypto.randomUUID(), bill_id: bill.id, amount_paise: bill.amount_paise, method: selectedMethod!, transaction_id: selectedTransactionId, occurred_at: now, recorded_at: now, recorded_by: user.id, source: "cashier", reversal_of: null, reason: null });
     }
   }
-  if (bill) next.audit.unshift({ id: crypto.randomUUID(), bill_id: bill.id, actor_id: user.id, action, created_at: now, detail: { target, reason, ...(selectedMethod ? { payment_method: selectedMethod } : {}) } });
+  if (bill) next.audit.unshift({ id: crypto.randomUUID(), bill_id: bill.id, actor_id: user.id, action, created_at: now, detail: { target, reason, ...(selectedMethod ? { payment_method: selectedMethod, transaction_id: selectedTransactionId } : {}) } });
   next.as_of = now;
+  return next;
+}
+export function demoDeleteStaff(snapshot: Snapshot, user: Staff, target: string): Snapshot {
+  const actor = snapshot.staff.find(p => p.id === user.id);
+  if (!actor?.active || actor.must_change_password || actor.role !== "super_admin") throw new Error("Super admin role required");
+  const account = snapshot.staff.find(p => p.id === target);
+  if (!account) throw new Error("Staff account not found");
+  if (account.id === actor.id || account.staff_id === "admin01") throw new Error("This account cannot be deleted");
+  const next = structuredClone(snapshot);
+  next.staff = next.staff.filter(p => p.id !== target);
+  for (const bill of next.bills) {
+    if (bill.uploaded_by === target) bill.uploaded_by = null;
+    if (bill.approved_by === target) bill.approved_by = null;
+  }
+  for (const payment of next.payments) if (payment.recorded_by === target) payment.recorded_by = null;
+  for (const event of next.audit) if (event.actor_id === target) event.actor_id = null;
+  next.as_of = new Date().toISOString();
+  next.audit.unshift({ id: crypto.randomUUID(), bill_id: null, actor_id: actor.id, action: "delete_staff", created_at: next.as_of, detail: { target, staff_id: account.staff_id } });
   return next;
 }
 export async function demoPdf(id: string, file?: File): Promise<Blob | undefined> {

@@ -18,3 +18,6 @@ samples/private
 *.pdf
 *.pem
 *.key
+
+# Local Supabase link metadata
+/supabase/.temp/

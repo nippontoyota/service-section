@@ -315,5 +315,49 @@ await assert.rejects(db.query("select app_staff_account($1,'create_staff',null,$
 await assert.rejects(db.query("select app_staff_account($1,'create_staff',null,'plaintext','invalid_hash','Invalid','cashier')",[admin]),/check constraint/);
 assert.equal((await db.query("select count(*) as n from profiles where staff_id='invalid_hash'")).rows[0].n,0);
 console.log("Admin-chosen passwords passed: all roles, immediate access, hash validation, reset behavior and admin authorization.");
+// Transaction references survive retries and reversals; account deletion is real.
+await db.exec("reset role");
+await db.exec(readFileSync("supabase/migrations/202611100002_transaction_id_and_delete_staff.sql", "utf8"));
+await db.exec("set role service_role");
+const payReference = reference => db.query("select app_desk_action($1,'collect',$2,'','GPay',$3)", [cashier, tokenBill, reference]);
+await assert.rejects(payReference("x".repeat(101)), /Transaction ID/);
+await payReference(" 00123-ABC ");
+await payReference("replacement");
+const referencePayment = (await db.query("select * from payments p where bill_id=$1 and source='cashier' and not exists(select 1 from payments r where r.reversal_of=p.id)", [tokenBill])).rows[0];
+assert.equal(referencePayment.transaction_id, "00123-ABC");
+assert.equal((await db.query("select app_desk_snapshot($1) as data", [admin])).rows[0].data.payments.find(p => p.id === referencePayment.id).transaction_id, "00123-ABC");
+await db.query("select app_desk_action($1,'reverse',$2,'Reference test')", [admin, referencePayment.id]);
+assert.equal((await db.query("select transaction_id from payments where reversal_of=$1", [referencePayment.id])).rows[0].transaction_id, "00123-ABC");
+await payReference(null);
+const paymentCount = (await db.query("select count(*) as n from payments")).rows[0].n;
+const retainedBillCount = (await db.query("select count(*) as n from bills")).rows[0].n;
+await db.query("update profiles set staff_id='admin01' where id=$1", [admin]);
+const secondAdmin = (await db.query("select app_staff_account($1,'create_staff',null,$2,'delete_admin','Deletion test admin','super_admin') as id", [admin, newHash])).rows[0].id;
+const deleteStaff = (actor, target) => db.query("select app_delete_staff($1,$2)", [actor,target]);
+await assert.rejects(deleteStaff(cashier, advisor), /Super admin/);
+await assert.rejects(deleteStaff(admin, admin), /cannot be deleted/);
+await assert.rejects(deleteStaff(secondAdmin, admin), /cannot be deleted/);
+await assert.rejects(deleteStaff(admin, randomUUID()), /not found/);
+await db.query("insert into staff_sessions(token_hash,staff_id) values($1,$2)", ["d".repeat(64), cashier]);
+await db.query("insert into staff_login_attempts(login_id) values('cashier') on conflict do nothing");
+await deleteStaff(admin, cashier);
+for (const table of ["profiles", "staff_credentials", "staff_sessions"]) {
+ assert.equal((await db.query(`select count(*) as n from ${table} where ${table === "profiles" ? "id" : "staff_id"}=$1`, [cashier])).rows[0].n, 0);
+}
+assert.equal((await db.query("select count(*) as n from staff_login_attempts where login_id='cashier'")).rows[0].n,0);
+assert.equal((await db.query("select count(*) as n from payments")).rows[0].n,paymentCount);
+assert.equal((await db.query("select count(*) as n from bills")).rows[0].n,retainedBillCount);
+assert.equal((await db.query("select recorded_by from payments where id=$1",[referencePayment.id])).rows[0].recorded_by,null);
+await assert.rejects(db.query("select app_desk_snapshot($1)",[cashier]), /Active staff/);
+await deleteStaff(admin, advisor);
+assert.equal((await db.query("select uploaded_by from uploads where id=$1",[upload])).rows[0].uploaded_by,null);
+assert.equal((await db.query("select count(*) as n from bills")).rows[0].n,retainedBillCount);
+assert.equal((await db.query("select count(*) as n from audit_events where action='delete_staff'")).rows[0].n,2);
+for (const role of ["anon", "authenticated"]) {
+ await db.exec("reset role; set role " + role);
+ await assert.rejects(deleteStaff(admin, secondAdmin), /permission denied/);
+ await assert.rejects(payReference("forbidden"), /permission denied/);
+}
+console.log("Transaction IDs and deletion passed: references, retries, reversals, null references, authorization, protected admin01, credential/session removal and retained history.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

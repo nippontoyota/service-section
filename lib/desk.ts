@@ -15,13 +15,13 @@ export type DeskBill = {
   customer_id?: string; customer_reference?: string | null;
   id: string; upload_id: string; customer_name: string; vehicle_no_display: string; vin: string;
   invoice_reference: string | null; invoice_date: string | null; amount_paise: number | null;
-  uploaded_by: string; created_at: string; approved_at: string | null; approved_by: string | null;
+  uploaded_by: string | null; created_at: string; approved_at: string | null; approved_by: string | null;
   approval_status: "pending" | "approved"; status: string; page_from: number; page_to: number;
   extraction_issues: string[]; amount_evidence: string; payment_evidence: PaymentEvidence[];
   uploads?: { original_filename: string; confirmed_at: string | null; file_hash?: string };
 };
-export type Payment = { id: string; bill_id: string; amount_paise: number; method: string; occurred_at: string; recorded_at: string; recorded_by: string; source: string; reversal_of: string | null; reason: string | null; is_archived?: boolean };
-export type Audit = { id: string; bill_id: string | null; actor_id: string; action: string; created_at: string; detail: Record<string, unknown> };
+export type Payment = { id: string; bill_id: string; amount_paise: number; method: string; transaction_id?: string | null; occurred_at: string; recorded_at: string; recorded_by: string | null; source: string; reversal_of: string | null; reason: string | null; is_archived?: boolean };
+export type Audit = { id: string; bill_id: string | null; actor_id: string | null; action: string; created_at: string; detail: Record<string, unknown> };
 export type DraftUpload = { id: string; original_filename: string; status: string; processing_error: string | null; bills: DeskBill[] };
 export type Snapshot = { drafts?: DraftUpload[]; bills: DeskBill[]; payments: Payment[]; staff: Staff[]; audit: Audit[]; as_of: string; schema_version?: number };
 export type Metric = "paid" | "unpaid" | "pending";
@@ -31,6 +31,11 @@ export function paymentMethod(method: unknown, other: unknown = "") {
   if (method !== "Other") return method;
   if (typeof other !== "string" || !other.trim() || other.trim().length > 100) throw new Error("Specify the other payment method (up to 100 characters)");
   return "Other: " + other.trim();
+}
+export function transactionId(value: unknown) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.trim().length > 100) throw new Error("Transaction ID must be up to 100 characters");
+  return value.trim() || null;
 }
 export function tokenNumber(value: unknown) {
   if (value === undefined || value === null) return null;
