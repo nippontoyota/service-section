@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { AuthenticationError, requireStaff, startSession } from "@/lib/supabase-server";
 import { hashPassword } from "@/lib/password";
 import { loadDesk } from "@/lib/desk-session";
-import { paymentMethod, paymentReferenceLabel, transactionId } from "@/lib/desk";
+import { paymentMethod, transactionId } from "@/lib/desk";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "Cache-Control": "no-store" } });
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       return response;
     } else if (["approve", "collect", "reverse"].includes(body.action)) {
       const method = body.action === "collect" ? paymentMethod(body.method, body.otherMethod) : "";
-      const reference = body.action === "collect" && paymentReferenceLabel(method) ? transactionId(body.transactionId) : null;
+      const reference = body.action === "collect" ? transactionId(body.transactionId, method) : null;
       const { error } = await service.rpc("app_desk_action", { staff: user.id, action: body.action, target: body.target, reason: body.reason ?? "", payment_method: method, ...(reference ? { transaction_id: reference } : {}) });
       if (error?.code === "PGRST202") throw new Error("Transaction IDs require the latest database migration. Ask your administrator to apply it.");
       if (error) throw new Error(error.code === "23505" ? "This invoice has already been approved. Open the existing bill." : error.message);

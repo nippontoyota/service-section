@@ -100,3 +100,5 @@ For the one-time production cleanup, `node --env-file=.env.local scripts/reset-p
 ## Transaction IDs and account deletion
 
 Apply `supabase/migrations/202611100002_transaction_id_and_delete_staff.sql` before deploying transaction ID entry and Delete account. It adds an optional payment reference, preserves it on reversals, and enables permanent profile/credential/session deletion by super admins. Existing bills, PDFs, collections and audit history are retained; references to deleted staff become null. The signed-in account and `admin01` are protected. This migration does not perform the one-time data reset.
+
+Apply `supabase/migrations/202611100003_required_payment_references.sql` for mandatory GPay and Demand Draft transaction IDs and cheque numbers. Validation runs in the cashier form, server and collection RPC. Historical payments remain unchanged and can still be reversed; Cash and Other do not require or save references.

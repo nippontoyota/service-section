@@ -577,7 +577,7 @@ function PaymentForm({ bill, busy, onConfirm }: { bill: DeskBill; busy: boolean;
       <option value="" disabled>Select payment method</option>{paymentMethods.map(value => <option key={value} value={value}>{value}</option>)}
     </select></label>
     {method === "Other" && <label>Specify other payment method<input required maxLength={100} value={otherMethod} disabled={busy} onChange={e => setOtherMethod(e.target.value)} placeholder="Enter payment method"/></label>}
-    {referenceLabel && <label>{referenceLabel} (optional)<input maxLength={100} value={transactionId} disabled={busy} onChange={e => setTransactionId(e.target.value)} placeholder={"Enter " + referenceLabel.toLowerCase()}/></label>}
-    <button className="sd-primary" disabled={busy || !method || (method === "Other" && !otherMethod.trim()) || bill.amount_paise === null || !bill.invoice_date || !bill.invoice_reference?.trim()}>Mark as paid · {money(bill.amount_paise)} <Check size={16}/></button>
+    {referenceLabel && <label>{referenceLabel} (required)<input required maxLength={100} value={transactionId} disabled={busy} onChange={e => setTransactionId(e.target.value)} placeholder={"Enter " + referenceLabel.toLowerCase()}/></label>}
+    <button className="sd-primary" disabled={busy || !method || Boolean(referenceLabel && !transactionId.trim()) || (method === "Other" && !otherMethod.trim()) || bill.amount_paise === null || !bill.invoice_date || !bill.invoice_reference?.trim()}>Mark as paid · {money(bill.amount_paise)} <Check size={16}/></button>
   </form>;
 }

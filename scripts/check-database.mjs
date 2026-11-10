@@ -329,6 +329,26 @@ assert.equal((await db.query("select app_desk_snapshot($1) as data", [admin])).r
 await db.query("select app_desk_action($1,'reverse',$2,'Reference test')", [admin, referencePayment.id]);
 assert.equal((await db.query("select transaction_id from payments where reversal_of=$1", [referencePayment.id])).rows[0].transaction_id, "00123-ABC");
 await payReference(null);
+// Historical payments without references still reverse after the new requirement.
+await db.exec("reset role");
+await db.exec(readFileSync("supabase/migrations/202611100003_required_payment_references.sql", "utf8"));
+await db.exec("set role service_role");
+const legacyReferencePayment = (await db.query("select id from payments p where bill_id=$1 and source='cashier' and not exists(select 1 from payments r where r.reversal_of=p.id)", [tokenBill])).rows[0];
+await db.query("select app_desk_action($1,'reverse',$2,'Legacy reference reversal')", [admin,legacyReferencePayment.id]);
+const beforeMissingReference = (await db.query("select count(*) as n from payments")).rows[0].n;
+for (const method of ["GPay", "Demand Draft", "Cheque"]) {
+ for (const reference of [null, "", "   "]) {
+  await assert.rejects(db.query("select app_desk_action($1,'collect',$2,'',$3,$4)", [cashier,tokenBill,method,reference]), /is required/);
+ }
+}
+assert.equal((await db.query("select count(*) as n from payments")).rows[0].n,beforeMissingReference);
+for (const method of ["GPay", "Demand Draft", "Cheque", "Cash", "Other: Bank transfer"]) {
+ await db.query("select app_desk_action($1,'collect',$2,'',$3,$4)", [cashier,tokenBill,method," 001234 "]);
+ const payment = (await db.query("select * from payments p where bill_id=$1 and source='cashier' and not exists(select 1 from payments r where r.reversal_of=p.id)", [tokenBill])).rows[0];
+ assert.equal(payment.transaction_id, ["Cash", "Other: Bank transfer"].includes(method) ? null : "001234");
+ await db.query("select app_desk_action($1,'reverse',$2,'Reference requirement test')", [admin,payment.id]);
+}
+console.log("Required references passed: missing/blank rejection, accepted GPay/DD/cheque references, Cash/Other discard references and legacy reversals remain valid.");
 const paymentCount = (await db.query("select count(*) as n from payments")).rows[0].n;
 const retainedBillCount = (await db.query("select count(*) as n from bills")).rows[0].n;
 await db.query("update profiles set staff_id='admin01' where id=$1", [admin]);

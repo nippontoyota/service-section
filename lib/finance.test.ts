@@ -214,7 +214,7 @@ test("payment methods require a choice and Other requires a description", () => 
   for (const method of paymentMethods.filter(value => value !== "Other")) {
     assert.equal(paymentMethod(method, "stale custom value"), method);
     const data = fixtureSnapshot();
-    const paid = demoAction(data, data.staff.find(p => p.role === "cashier")!, "collect", "sample-4", "", method);
+    const paid = demoAction(data, data.staff.find(p => p.role === "cashier")!, "collect", "sample-4", "", method, "", "00123");
     assert.equal(paid.payments.at(-1)!.method, method);
   }
   for (const method of [undefined, null, "", "Invalid", 123]) assert.throws(() => paymentMethod(method));
@@ -240,9 +240,9 @@ test("manual tokens preserve leading zeros and prefixes and allow unassigned bil
 });
 
 test("transaction IDs preserve leading zeros through retries and reversals", () => {
-  assert.equal(transactionId(" 0012-ABC "), "0012-ABC");
-  for (const value of [undefined, null, "", "   "]) assert.equal(transactionId(value), null);
-  for (const value of [123, {}, "x".repeat(101)]) assert.throws(() => transactionId(value), /Transaction ID/);
+  assert.equal(transactionId(" 0012-ABC ", "GPay"), "0012-ABC");
+  for (const value of [undefined, null, "", "   "]) assert.throws(() => transactionId(value, "GPay"), /required/);
+  for (const value of [123, {}, "x".repeat(101)]) assert.throws(() => transactionId(value, "GPay"), /Transaction ID/);
   let data = fixtureSnapshot();
   const cashier = data.staff.find(p => p.role === "cashier")!;
   const admin = data.staff.find(p => p.role === "super_admin")!;
@@ -304,4 +304,20 @@ test("cashier token order is numeric across customers, with missing tokens last 
     { ...bill, id: "one", token_number: "1" },
   ];
   assert.deepEqual(rows.sort(compareCashierTokens).map(b => b.id), ["one", "two-first", "two-later", "ten", "a-two", "a-ten", "missing"]);
+});
+
+test("GPay, DD and cheque collections reject missing or whitespace references before changing a bill", () => {
+  const data = fixtureSnapshot();
+  const cashier = data.staff.find(p => p.role === "cashier")!;
+  const before = structuredClone(data);
+  for (const method of ["GPay", "Demand Draft", "Cheque"]) {
+    for (const reference of [undefined, null, "", "   ", 123]) {
+      assert.throws(() => demoAction(data, cashier, "collect", "sample-4", "", method, "", reference), new RegExp(paymentReferenceLabel(method) + " is required"));
+    }
+    assert.throws(() => transactionId("x".repeat(101), method), /up to 100 characters/);
+    assert.equal(transactionId(" 00123 ", method), "00123");
+  }
+  assert.deepEqual(data, before);
+  assert.equal(transactionId(undefined, "Cash"), null);
+  assert.equal(transactionId(undefined, "Other: Bank transfer"), null);
 });

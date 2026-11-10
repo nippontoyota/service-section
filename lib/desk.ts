@@ -36,10 +36,12 @@ export function paymentReferenceLabel(method: string) {
   if (method === "Cheque") return "Cheque number";
   return method === "GPay" || method === "Demand Draft" ? "Transaction ID" : null;
 }
-export function transactionId(value: unknown) {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || value.trim().length > 100) throw new Error("Transaction ID must be up to 100 characters");
-  return value.trim() || null;
+export function transactionId(value: unknown, method: string) {
+  const label = paymentReferenceLabel(method);
+  if (!label) return null;
+  if (typeof value !== "string" || !value.trim()) throw new Error(label + " is required");
+  if (value.trim().length > 100) throw new Error(label + " must be up to 100 characters");
+  return value.trim();
 }
 export function tokenNumber(value: unknown) {
   if (value === undefined || value === null) return null;
