@@ -50,6 +50,16 @@ The cashier Overview also shows daily billed value, paid bill count/value and un
 
 Customer groups use customers.id as the primary key and bills.customer_id as the foreign key: one customer can have many bills. An exact normalized Customer ID from the PDF is the preferred identity, including across multiple vehicles. If absent, exact normalized name + VIN (or registration) forms a provisional group. Names alone never merge records; bills without sufficient identity remain separate. Documents with and without Customer ID are not silently merged across those identity types. Invoice/job-card references identify bills or visits, not customers. The group totals and related-bill links respect the logged-in role's visibility.
 
+## WhatsApp bill sharing
+
+Advisors enter the customer’s WhatsApp number and review the preset message before submission. Ten-digit Indian mobile numbers default to +91; other countries require an explicit international prefix. **Submit & open WhatsApp** submits a single bill to the cashier and opens the advisor’s signed-in WhatsApp account. The advisor presses Send. For batches, each submitted bill has its own **Open WhatsApp** action. A blocked popup leaves a visible link; **My bills** allows later sharing, correcting the recipient number, and preparing a fresh link.
+
+**Submit all without WhatsApp**, or the per-bill skip checkbox, explicitly bypasses sharing when needed. A WhatsApp preparation failure never reverses a successful cashier submission. Retry the sharing action without uploading or submitting again. BillDesk records preparation and explicit skips; it cannot verify that a message was sent, delivered, or read.
+
+Customer downloads use seven-day signed links to private PDFs containing only the selected bill’s page range. Combined originals remain staff-only. Anyone holding a customer link can open it until expiry; correcting the recipient or preparing another link does not revoke previously issued links. Customer copies are retained with the originals and reused for future sharing. Links expire; retained bills do not. No WhatsApp Business API credentials or messaging service are required.
+
+Set server-only `BILLDESK_REQUIRE_TOKEN=true` where a branch requires tokens; the default is `false`. This is one branch per deployment, with the existing shared cashier queue. The UI and confirmation endpoint enforce the setting, including submissions without WhatsApp. Existing submitted bills are unaffected. Demo mode validates the same fields but disables external customer sharing because its PDFs are stored in the browser.
+
 ## Real staff and shared records
 
 1. Configure a development Supabase project. Apply migrations in order:
@@ -63,6 +73,7 @@ Customer groups use customers.id as the primary key and bills.customer_id as the
    - supabase/migrations/202611100001_admin_chosen_password.sql (apply before deploying admin-chosen staff passwords)
    - supabase/migrations/202611100002_transaction_id_and_delete_staff.sql (apply before deploying transaction IDs and permanent staff deletion)
    - supabase/migrations/202611100003_required_payment_references.sql (requires references for new GPay, Demand Draft and Cheque collections)
+   - supabase/migrations/202611110001_whatsapp_sharing.sql (apply immediately before deploying WhatsApp sharing; replaces the confirmation RPC signature)
 2. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.local. Set SERVICE_DESK_DEMO=false. The publishable/anon key is no longer required. Never expose the secret/service-role key in frontend variables. Supabase supplies database and private PDF storage; staff login does not use Supabase Auth, emails or Auth dashboard settings.
 3. Run npm run bootstrap:staff. It installs individually salted scrypt hashes for admin01 / AdminDemo!2026, cashier01 / CashierDemo!2026 and advisor01 / AdvisorDemo!2026. Existing profile IDs and bill history are preserved. A repeat run does not overwrite passwords already configured in staff_credentials. The three initial accounts are usable immediately; additional admin-created accounts use the 6–8 character password (any characters; no complexity requirements) chosen by the admin and can sign in immediately. Password resets still issue temporary passwords that must be changed at first login. Known initial passwords are not made private by hashing; reset them before opening the app to untrusted users.
 4. Restart the app. The admin can create further individual staff accounts, reset passwords, disable access or permanently delete accounts. Deletion removes the profile, credentials and sessions; existing bills and collection history remain, with removed staff shown as “Deleted staff account”. The signed-in account and admin01 cannot be deleted. User IDs use 3–40 lowercase letters, digits or underscores. There is no public signup or email recovery; the admin resets staff access.
@@ -98,7 +109,9 @@ Internal authenticated routes:
 - POST /api/auth/logout: revokes the current app session and clears its cookie.
 - GET /api/desk: current profile and a consistent bill/payment/staff/audit snapshot.
 - POST /api/desk: password, approve, collect, reverse, pdf, reextract, create_staff, reset_staff, toggle_staff or delete_staff.
-- Existing upload init/process/confirm endpoints remain; only advisors can use them.
+- Existing upload init/process endpoints remain; only advisors can use them.
+- POST /api/uploads/[id]/confirm: `tokens` keyed by bill ID and `contacts` keyed by bill ID, each containing `{ phone, skipWhatsApp }`. Every bill needs a valid phone or an explicit skip. Token requirements come from the server deployment setting, not request input. Confirmation remains atomic per PDF and retry-safe.
+- POST /api/bills/[id]/whatsapp: `{ customerPhone }`; returns `{ whatsappUrl, expiresAt }`. Requires the uploading advisor and an already-submitted bill. Creates or reuses the customer-only PDF, signs it for seven days, then saves the reviewed number and preparation audit event.
 - POST /api/demo/extract: real PDF parsing for development-only demo uploads; disabled in production.
 - GET /api/demo/reference-bills: parse the three fixed local reference PDFs. The file query parameter serves only one of those three originals. Disabled in production.
 
@@ -118,3 +131,5 @@ Optional integration checks do not add production dependencies:
 - With the demo server running, set PLAYWRIGHT_PATH to its installed package directory and run node scripts/check-browser.mjs. DESK_URL defaults to http://localhost:3000. It uses a fresh browser context for the upload-to-admin workflow, password changes, PDF preview and mobile layout.
 
 The app-managed login and Supabase Storage need a configured-project smoke test before deploying. Local database tests emulate the legacy auth/storage schemas but do not contact a hosted Supabase service.
+
+WhatsApp integration check: build with `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120`, then run `PLAYWRIGHT_PATH=/path/to/playwright node scripts/check-whatsapp-browser.mjs`. It starts an isolated backend, exercises real application routes and intercepts WhatsApp handoffs without sending messages. The storage stub tests signed-link behavior; production Supabase and real-device WhatsApp handoffs still need a controlled pilot.

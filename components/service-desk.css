@@ -287,6 +287,15 @@
 .sd-upload-file>svg{flex-shrink:0;color:var(--sd-accent-ink);margin-top:2px}
 .sd-upload-file small{display:block;margin-top:6px}
 .sd-review-card{padding:16px 0 0;min-width:0}
+.sd-whatsapp{display:grid;gap:10px;margin-top:16px}
+.sd-whatsapp small{color:var(--sd-muted);line-height:1.5}
+.sd-whatsapp .sd-check{display:flex;align-items:center;gap:10px}
+.sd-whatsapp .sd-check input{width:18px;height:18px;margin:0}
+.sd-whatsapp summary{cursor:pointer;font-size:13px}
+.sd-message-preview{white-space:pre-wrap;overflow-wrap:anywhere;padding:14px;background:var(--sd-bg);border-radius:8px;font-size:13px;line-height:1.6}
+.sd-sharing-queue{padding:20px;margin:20px 0;border:1px solid var(--sd-line);border-radius:12px;background:#fff}
+.sd-sharing-queue>p{font-size:13px;color:var(--sd-muted)}
+.sd-whatsapp a{font-size:13px;text-decoration:underline}
 .sd-review-card+.sd-review-card{border-top:1px solid var(--sd-line);margin-top:16px}
 .sd-review-meta{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
 .sd-review-meta>small{flex-shrink:0;background:var(--sd-subtle);padding:2px 7px;border-radius:4px;font-size:10px}

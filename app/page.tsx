@@ -14,5 +14,5 @@ export default async function Home() {
     try { initial = await loadDesk(new Request("http://billdesk.local", { headers: await headers() })); }
     catch (error) { if (!(error instanceof AuthenticationError)) initialError = "Workspace temporarily unavailable. Please retry."; }
   }
-  return <ServiceDesk demo={demo} ready={ready} initial={initial} initialError={initialError} />;
+  return <ServiceDesk demo={demo} ready={ready} initial={initial} initialError={initialError} requireToken={process.env.BILLDESK_REQUIRE_TOKEN === "true"} />;
 }

@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 const root = process.cwd();
 const bundle = mkdtempSync(join(tmpdir(), "billdesk-bundle-"));
 try {
-  for (const route of ["api/uploads/[id]/process", "api/desk"]) {
+  for (const route of ["api/uploads/[id]/process", "api/desk", "api/bills/[id]/whatsapp"]) {
     const trace = resolve(root, ".next/server/app", route, "route.js.nft.json");
     const { files } = JSON.parse(readFileSync(trace, "utf8"));
     assert(files.some(file => file.endsWith("/pdf.worker.mjs")), `${route}: missing PDF worker`);

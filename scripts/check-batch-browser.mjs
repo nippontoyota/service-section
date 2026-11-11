@@ -39,7 +39,8 @@ const server = createServer(async (req, res) => {
 await new Promise(resolve => server.listen(3120, "127.0.0.1", resolve));
 const app = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--port", "3119", "--hostname", "127.0.0.1"], { env: { ...process.env, NEXT_PUBLIC_SUPABASE_URL: backend, SUPABASE_SERVICE_ROLE_KEY: "isolated-test-key", SERVICE_DESK_DEMO: "false" }, stdio: ["ignore", "pipe", "pipe"] });
 let appLogs = ""; app.stdout.on("data", b => { appLogs += b; }); app.stderr.on("data", b => { appLogs += b; });
-const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
+// The full Chromium browser includes the PDF viewer used by the display timing check.
+const browser = await chromium.launch({ channel: "chromium", headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = []; page.on("pageerror", error => errors.push(error.message));
 page.on("dialog", dialog => void dialog.accept());
@@ -98,7 +99,7 @@ try {
     if (width === 1440) { await page.getByRole("dialog", { name: "Upload and review bills" }).evaluate(el => { el.scrollTop = 0; }); await page.screenshot({ path: "/tmp/billdesk-upload-tiles-desktop.png" }); }
     if (width === 320) await page.screenshot({ path: "/tmp/billdesk-upload-320.png", fullPage: true });
   }
-  await click("Submit all"); await page.getByText("Synthetic submission failure", { exact: true }).waitFor(); await page.waitForFunction(() => document.querySelectorAll(".sd-queue-item").length === 1); assert.equal(maxConfirm, 2); assert.equal(await page.locator(".sd-queue-item").count(), 1);
+  await click("Submit all without WhatsApp"); await page.getByText("Synthetic submission failure", { exact: true }).waitFor(); await page.waitForFunction(() => document.querySelectorAll(".sd-queue-item").length === 1); assert.equal(maxConfirm, 2); assert.equal(await page.locator(".sd-queue-item").count(), 1);
   // Valid server session restores the draft without rendering login or fetching the desk twice.
   let clientDeskGets = 0; page.on("request", req => { if (new URL(req.url()).pathname === "/api/desk" && req.method() === "GET") clientDeskGets++; });
   sessionDelay = 500; await page.reload(); await page.getByRole("button", { name: "Upload bills (1)", exact: true }).waitFor();
@@ -108,7 +109,7 @@ try {
   await page.waitForFunction(() => performance.getEntriesByName("pdf-display").length > 0);
   assert.equal(signedRequests, 1, "Details prefetch and repeated view share the same signed request"); assert.equal(downloadRequests, 1);
   console.log("Controlled first stored-view timings (ms):", await page.evaluate(() => Object.fromEntries(["pdf-authorization","pdf-signing","pdf-download","pdf-display"].map(name => [name, performance.getEntriesByName(name).at(-1)?.duration]))));
-  await click("Close bill details"); await click("Submit all"); await page.getByText("0 ready · 0 failed · 0 / 10 PDFs", { exact: true }).waitFor();
+  await click("Close bill details"); await click("Submit all without WhatsApp"); await page.getByText("0 ready · 0 failed · 0 / 10 PDFs", { exact: true }).waitFor();
   await pick(Array.from({ length: 12 }, (_, i) => `limit-${i}.pdf`)); assert.equal(await page.locator(".sd-queue-item").count(), 10);
   await pick(["limit-0.pdf"]); assert.equal(await page.locator(".sd-queue-item").count(), 10);
   await click("Close upload dialog");

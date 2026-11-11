@@ -8,6 +8,7 @@ export type BillDocument = {
   typeEvidence: string;
 };
 export type DeskBill = {
+  customer_phone?: string | null;
   token_number?: string | null;
   bill_type?: string; reference_file?: string;
   job_card_reference?: string | null;

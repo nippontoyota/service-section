@@ -379,5 +379,54 @@ for (const role of ["anon", "authenticated"]) {
  await assert.rejects(payReference("forbidden"), /permission denied/);
 }
 console.log("Transaction IDs and deletion passed: references, retries, reversals, null references, authorization, protected admin01, credential/session removal and retained history.");
+// Customer contacts and explicit skips share the atomic submission transaction.
+await db.exec("reset role");
+await db.exec(readFileSync("supabase/migrations/202611110001_whatsapp_sharing.sql", "utf8"));
+const waAdvisor = otherAdvisor, waCashier = randomUUID();
+await db.query("insert into profiles(id,staff_id,full_name,role,must_change_password) values($1,'wacashier','WA cashier','cashier',false)", [waCashier]);
+const waDraft = await draft("8".repeat(64), waAdvisor);
+const waBill = (await db.query("select id from bills where upload_id=$1", [waDraft])).rows[0].id;
+const waSibling = randomUUID();
+await db.query("insert into bills(id,upload_id,uploaded_by,page_from,page_to,connection_key,connection_key_type) values($1,$2,$3,2,2,'test','reference')", [waSibling,waDraft,waAdvisor]);
+const contacts = { [waBill]: { phone: "+919876543210", skipWhatsApp: false }, [waSibling]: { phone: null, skipWhatsApp: true } };
+const waConfirm = (contact = contacts, tokens = {}, required = false, actor = waAdvisor, target = waDraft) => db.query("select to_jsonb(app_confirm_upload($1,$2,$3::jsonb,$4::jsonb,$5)) as upload", [actor,target,JSON.stringify(tokens),JSON.stringify(contact),required]);
+const prepare = (target = waBill, actor = waAdvisor, phone = "+919876543211") => db.query("select app_prepare_whatsapp($1,$2,$3,now()+interval '7 days')", [actor,target,phone]);
+await db.exec("set role service_role");
+await assert.rejects(prepare(), /before sharing/);
+await assert.rejects(waConfirm(contacts, {}, false, waCashier), /Service advisor/);
+await assert.rejects(waConfirm(contacts, {}, false, secondAdmin), /Service advisor/);
+for (const contact of [{}, [], { [waBill]: { phone: "bad", skipWhatsApp: false } }, { ...contacts, [waSibling]: {} }, { ...contacts, [waSibling]: { skipWhatsApp: "true" } }, { ...contacts, [singleStep]: { skipWhatsApp: true } }]) {
+ await assert.rejects(waConfirm(contact), /WhatsApp|contact/);
+}
+await assert.rejects(waConfirm(contacts, { [waBill]: "0012" }, true), /Token number is required/);
+assert.equal((await db.query("select customer_phone from bills where id=$1", [waBill])).rows[0].customer_phone, null, "Invalid sibling rolls back contact writes");
+assert.equal((await db.query("select confirmed_at from uploads where id=$1", [waDraft])).rows[0].confirmed_at, null);
+assert.equal((await db.query("select app_desk_snapshot($1) as data", [waCashier])).rows[0].data.bills.some(b => b.id === waBill), false);
+const waResult = (await waConfirm(contacts, { [waBill]: "0012", [waSibling]: "A-013" }, true)).rows[0].upload;
+assert.ok(waResult.confirmed_at);
+assert.equal((await waConfirm(contacts)).rows[0].upload.confirmed_at, waResult.confirmed_at);
+assert.equal((await db.query("select customer_phone,token_number from bills where id=$1", [waBill])).rows[0].customer_phone, "+919876543210");
+assert.equal((await db.query("select token_number from bills where id=$1", [waBill])).rows[0].token_number, "0012");
+assert.equal((await db.query("select count(*) as n from audit_events where bill_id=$1 and action='submitted'", [waBill])).rows[0].n, 1);
+assert.equal((await db.query("select count(*) as n from audit_events where bill_id=$1 and action='whatsapp_skipped'", [waSibling])).rows[0].n, 1);
+assert.equal((await db.query("select app_desk_snapshot($1) as data", [waCashier])).rows[0].data.bills.some(b => b.id === waBill), true, "Cashier sees the bill before WhatsApp preparation");
+await assert.rejects(prepare(waBill, waCashier), /Service advisor/);
+await assert.rejects(prepare(waBill, waAdvisor, "bad"), /Valid customer/);
+await assert.rejects(prepare(tokenBill, waAdvisor), /not accessible/);
+await prepare();
+assert.equal((await db.query("select customer_phone from bills where id=$1", [waBill])).rows[0].customer_phone, "+919876543211");
+assert.equal((await db.query("select count(*) as n from audit_events where bill_id=$1 and action='whatsapp_prepared'", [waBill])).rows[0].n, 1);
+assert.equal((await db.query("select count(*) as n from audit_events where bill_id=$1 and action='submitted'", [waBill])).rows[0].n, 1);
+const optionalDraft = await draft("9".repeat(64), waAdvisor);
+const optionalBill = (await db.query("select id from bills where upload_id=$1", [optionalDraft])).rows[0].id;
+await waConfirm({ [optionalBill]: { skipWhatsApp: true } }, {}, false, waAdvisor, optionalDraft);
+for (const role of ["anon", "authenticated"]) {
+ await db.exec("reset role; set role " + role);
+ await assert.rejects(waConfirm(), /permission denied/);
+ await assert.rejects(prepare(), /permission denied/);
+}
+await db.exec("reset role");
+assert.equal((await db.query("select to_regprocedure('app_confirm_upload(uuid,uuid,jsonb)') as old")).rows[0].old, null);
+console.log("WhatsApp migration passed: explicit choices, required tokens, atomic rollback, owner scope, cashier visibility before sharing, retries, phone correction and audit history.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

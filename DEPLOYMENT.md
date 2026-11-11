@@ -102,3 +102,14 @@ For the one-time production cleanup, `node --env-file=.env.local scripts/reset-p
 Apply `supabase/migrations/202611100002_transaction_id_and_delete_staff.sql` before deploying transaction ID entry and Delete account. It adds an optional payment reference, preserves it on reversals, and enables permanent profile/credential/session deletion by super admins. Existing bills, PDFs, collections and audit history are retained; references to deleted staff become null. The signed-in account and `admin01` are protected. This migration does not perform the one-time data reset.
 
 Apply `supabase/migrations/202611100003_required_payment_references.sql` for mandatory GPay and Demand Draft transaction IDs and cheque numbers. Validation runs in the cashier form, server and collection RPC. Historical payments remain unchanged and can still be reversed; Cash and Other do not require or save references.
+
+
+## WhatsApp sharing
+
+Apply `supabase/migrations/202611110001_whatsapp_sharing.sql` immediately before deploying this release, after all preceding migrations. It adds nullable bill phone numbers, replaces the confirmation RPC with explicit per-bill contact/skip validation, and adds the advisor-only preparation RPC. The older application cannot submit against the new confirmation signature; coordinate migration and deployment in a short maintenance window. No historical bill, payment, or PDF is removed.
+
+Set `BILLDESK_REQUIRE_TOKEN=true` for branches that require a token on every new submission, or leave it unset/false to keep tokens optional. This server-only setting is passed to the UI and enforced by the confirmation endpoint and RPC; browser input cannot override it. Each deployment represents one branch.
+
+Customer copies use the existing private `bills` bucket under `customer-copies/v1/`, with seven-day signed access and no public bucket or WhatsApp API credentials. Copies contain only the recorded bill pages. Keep the originals and customer copies private. Existing short-lived staff preview links are unchanged. Previously issued customer links remain usable until expiry even if the recipient number is corrected.
+
+Run `npm test`, `npm run lint`, `npm run build`, the database check, and the isolated WhatsApp browser check documented in README.md. Pilot one bill and one combined PDF with controlled customer numbers on a phone and WhatsApp Web. Check recipient, preset text, page boundaries, download, token display, and cashier visibility. No automated test sends WhatsApp messages.

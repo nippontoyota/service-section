@@ -34,7 +34,7 @@ try {
   assert.match(await page.locator(".sd-review-card").innerText(),/12,759/);
   assert.match(await page.locator(".sd-review-card").innerText(),/TXA24-23030/);
   await page.getByLabel("Token number (optional)").fill("0012");
-  await page.getByRole("button",{name:"Submit all"}).click();
+  await page.getByRole("button",{name:"Submit all without WhatsApp",exact:true}).click();
   await page.getByText("0 ready · 0 failed · 0 / 10 PDFs",{exact:true}).waitFor();
   await page.getByRole("button",{name:"Close upload dialog",exact:true}).click();
   await page.getByRole("button",{name:"TXA24-23030",exact:true}).waitFor();
