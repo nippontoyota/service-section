@@ -56,6 +56,8 @@ Uploads are limited to 10 MB and 100 pages. Digital text PDFs are supported; sca
 
 Private PDFs, customer fixtures, local environment files and generated reports are excluded from Git and local Vercel CLI uploads. Production uses Supabase records and storage, not files on the function filesystem.
 
+Keep the private PDF exclusion in `.vercelignore` anchored as `/bills/`. An unanchored `bills` rule also removes `app/api/bills`, causing WhatsApp and draft-deletion requests to return HTML 404 pages. `npm run check:deployment` checks that all API route sources remain included while private files stay excluded.
+
 ## Verify after deployment
 
 Before deployment, run `npm ci`, `npm run lint`, `npm test`, `npm run build` and `npm run check:deployment` from a clean checkout. The deployment check parses a synthetic PDF using only the files traced into the function bundle; it does not need Supabase credentials or customer PDFs.

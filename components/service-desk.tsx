@@ -11,6 +11,7 @@ import { DeskShell } from "./desk-shell";
 import { fileIdentity, selectFiles, restoreDrafts, withTwoWorkers, type UploadFile } from "@/lib/upload-queue";
 import { PdfLinks } from "@/lib/pdf-preview";
 import { billContacts, customerPhone, whatsappMessage } from "@/lib/whatsapp";
+import { readApiResponse } from "@/lib/api-response";
 import "./service-desk.css";
 
 const labels = { cashier: "Cashier", service_advisor: "Service advisor", super_admin: "Super admin" };
@@ -88,16 +89,13 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     const response = await fetch(url, { method: body ? "POST" : "GET", credentials: "same-origin", headers: {
       "Content-Type": "application/json",
     }, body: body ? JSON.stringify(body) : undefined });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Request failed");
-    return result;
+    return readApiResponse(response);
   }, []);
   const refresh = useCallback(async () => {
     const version = refreshVersion.current;
     if (demo) {
       const response = await fetch("/api/demo/reference-bills");
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
+      const result = await readApiResponse(response);
       if (version !== refreshVersion.current) return;
       const current = readDemo();
       if (current.bills.some(isBuiltInSample) && !localStorage.getItem("service-desk-before-reference-import")) {
@@ -112,8 +110,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       const response = await fetch("/api/desk", { credentials: "same-origin", cache: "no-store" });
       if (version !== refreshVersion.current) return;
       if (response.status === 401) { acceptSnapshot(empty, null); clearPreviews(); setFiles([]); return; }
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not load workspace");
+      const result = await readApiResponse(response);
       if (version === refreshVersion.current) acceptSnapshot(result.snapshot ?? empty, result.profile);
     }
   }, [demo, ready, acceptSnapshot, clearPreviews]);
@@ -255,8 +252,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       const form = new FormData(); form.set("file", file);
       updateFile(item.id, { state: "reading", progress: 70 });
       const response = await fetch("/api/demo/extract", { method: "POST", body: form });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
+      const result = await readApiResponse(response);
       const snapshot = readDemo();
       if (snapshot.bills.some(b => b.uploads?.file_hash === result.hash && b.uploads?.confirmed_at)) throw new Error("This PDF has already been submitted");
       const uploadId = item.uploadId || crypto.randomUUID();

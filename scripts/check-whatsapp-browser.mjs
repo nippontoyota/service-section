@@ -124,6 +124,14 @@ try {
   await page.getByRole("dialog", { name: "Upload and review bills" }).getByText(/Submitted to cashier; WhatsApp preparation failed/).waitFor();
   assert.equal(confirms, 1); assert.equal(preparations, 0); assert.ok(alpha.uploads.confirmed_at);
   assert.equal(storageUploads, 1); assert.equal(handoffs.length, 0);
+  // Reproduce a deployment that omitted the route and serves an HTML 404 page.
+  const missingRoute = "**/api/bills/*/whatsapp";
+  await page.route(missingRoute, route => route.fulfill({ status: 404, contentType: "text/html", body: "<!DOCTYPE html><html>Not found</html>" }));
+  await click("Open WhatsApp");
+  await page.getByRole("dialog", { name: "Upload and review bills" }).getByText(/This action is unavailable on the server \(HTTP 404\)/).waitFor();
+  assert.doesNotMatch(await page.locator(".sd-notice").last().innerText(), /Unexpected token|DOCTYPE/);
+  assert.equal(confirms, 1); assert.equal(preparations, 0); assert.equal(handoffs.length, 0);
+  await page.unroute(missingRoute);
   failSigning = false;
   // Block popups to verify the visible handoff link still works.
   await page.evaluate(() => { window.open = () => null; });

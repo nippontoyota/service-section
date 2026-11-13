@@ -3,7 +3,8 @@ node_modules
 .git
 .env*
 !.env.example
-bills
+# Only exclude the private PDF directory at the repository root, not app/api/bills.
+/bills/
 samples/private
 output
 coverage
