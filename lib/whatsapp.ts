@@ -1,4 +1,4 @@
-import type { DeskBill } from "./desk";
+import { billType, type DeskBill } from "./desk";
 
 export const customerLinkSeconds = 7 * 24 * 60 * 60;
 export type BillContact = { phone: string | null; skipWhatsApp: boolean };
@@ -26,14 +26,34 @@ export function billContacts(value: unknown): Record<string, BillContact> {
   }));
 }
 
-export function whatsappMessage(bill: Pick<DeskBill, "customer_name" | "invoice_reference" | "vehicle_no_display" | "token_number">, link: string, advisor: string) {
+export function customerShareBills(selected: DeskBill, candidates: DeskBill[]) {
+  const unique = new Map(candidates.map(bill => [bill.id, bill]));
+  unique.set(selected.id, selected);
+  return [...unique.values()].filter(bill => bill.uploads?.confirmed_at && bill.uploaded_by === selected.uploaded_by
+    && (bill.id === selected.id || Boolean(selected.customer_id && bill.customer_id === selected.customer_id)))
+    .sort((a, b) => Number(b.id === selected.id) - Number(a.id === selected.id)
+      || a.created_at.localeCompare(b.created_at) || a.page_from - b.page_from || a.id.localeCompare(b.id));
+}
+
+type MessageBill = Pick<DeskBill, "customer_name" | "invoice_reference" | "vehicle_no_display" | "token_number" | "invoice_date" | "field_confidence" | "bill_type">;
+export function whatsappMessage(bills: { bill: MessageBill; link: string }[], advisor: string) {
+  if (!bills.length) throw new Error("At least one bill is required for WhatsApp sharing");
+  const customer = bills[0].bill.customer_name;
+  const sections = bills.map(({ bill, link }, index) => {
+    const type = billType(bill);
+    return [
+      `*${index + 1}. ${type === "Type not identified" ? "Bill" : type}${bill.invoice_reference ? " — " + bill.invoice_reference : ""}*`,
+      link,
+      [bill.vehicle_no_display ? "Vehicle: " + bill.vehicle_no_display : "", bill.invoice_date ? "Date: " + bill.invoice_date : ""].filter(Boolean).join(" · "),
+      bill.token_number ? "Token number: " + bill.token_number : "",
+    ].filter(Boolean).join("\n");
+  });
   return [
-    `Hello${bill.customer_name ? " " + bill.customer_name : ""}, here is your bill${bill.invoice_reference ? " " + bill.invoice_reference : ""}${bill.vehicle_no_display ? " for " + bill.vehicle_no_display : ""}.`,
-    link,
-    bill.token_number ? "Token number: " + bill.token_number : "",
-    "Please download your bill within 7 days.",
+    `Hello${customer ? " " + customer : ""}, ${bills.length === 1 ? "here is your bill" : `here are your ${bills.length} bills`}.`,
+    ...sections,
+    `Please download your ${bills.length === 1 ? "bill" : "bills"} within 7 days.`,
     "Thank you" + (advisor ? ", " + advisor : "") + ".",
-  ].filter(Boolean).join("\n");
+  ].join("\n\n");
 }
 
 export function whatsappUrl(phone: string, message: string) {

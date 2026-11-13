@@ -50,7 +50,7 @@ export function tokenNumber(value: unknown) {
   return value.trim() || null;
 }
 export const money = (paise: number | null) => paise === null ? "Not extracted" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(paise / 100);
-export const billType = (bill: DeskBill) => bill.field_confidence?.document?.billType || bill.bill_type || "Type not identified";
+export const billType = (bill: Pick<DeskBill, "field_confidence" | "bill_type">) => bill.field_confidence?.document?.billType || bill.bill_type || "Type not identified";
 export const isSupportingNote = (bill: DeskBill) => bill.amount_paise === null
   && ["warranty_note", "amc_note"].includes(bill.field_confidence?.document?.kind ?? "")
   && bill.amount_evidence.startsWith("No monetary total stated;");

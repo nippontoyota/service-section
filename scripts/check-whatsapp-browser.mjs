@@ -16,7 +16,7 @@ for (const text of ["CUSTOMER ALPHA", "ALPHA CONTINUATION", "CUSTOMER BRAVO"]) s
 const original = Buffer.from(await source.save());
 const storage = new Map([["test.pdf", original]]), signedLinks = new Map();
 const bills = [], uploads = [], audit = [];
-let confirms = 0, preparations = 0, failSigning = true, storageUploads = 0;
+let confirms = 0, preparations = 0, failSigning = true, storageUploads = 0, failBill = null;
 function draft(name, from, to) {
   const upload = { id: randomUUID(), original_filename: name + ".pdf", storage_path: "test.pdf", confirmed_at: null, file_hash: createHash("sha256").update(name).digest("hex"), status: "review" };
   const bill = { id: randomUUID(), upload_id: upload.id, uploaded_by: advisorId, customer_name: name, customer_reference: name, customer_id: name, customer_phone: null, token_number: null, invoice_reference: "INV-" + name, vehicle_no_display: "KL01AB1234", vin: "", invoice_date: "2026-11-11", amount_paise: 10000, approval_status: "pending", approved_at: null, approved_by: null, created_at: new Date().toISOString(), page_from: from, page_to: to, amount_evidence: "Total 100", extraction_issues: [], payment_evidence: [], uploads: upload };
@@ -33,6 +33,11 @@ const server = createServer(async (req, res) => {
     if (path === "/rest/v1/rpc/app_desk_snapshot") return json(res, snapshot());
     if (path === "/rest/v1/uploads") return json(res, snapshot().drafts);
     if (path === "/rest/v1/bills") {
+      if (url.searchParams.has("customer_id")) {
+        assert.equal(url.searchParams.get("uploaded_by"), "eq." + advisorId);
+        assert.equal(url.searchParams.get("uploads.confirmed_at"), "not.is.null");
+        return json(res, bills.filter(b => "eq." + b.customer_id === url.searchParams.get("customer_id") && "eq." + b.uploaded_by === url.searchParams.get("uploaded_by") && b.uploads.confirmed_at));
+      }
       const bill = bills.find(b => "eq." + b.id === url.searchParams.get("id") && (!url.searchParams.has("uploaded_by") || "eq." + b.uploaded_by === url.searchParams.get("uploaded_by")));
       return json(res, bill || null);
     }
@@ -63,7 +68,7 @@ const server = createServer(async (req, res) => {
       const key = path.slice(signPrefix.length);
       if (req.method === "POST") {
         const body = JSON.parse(await bytes(req));
-        if (failSigning && key.startsWith("customer-copies/")) return json(res, { statusCode: "503", message: "Synthetic signing outage" }, 503);
+        if ((failSigning && key.startsWith("customer-copies/")) || (failBill && key.includes(failBill))) return json(res, { statusCode: "503", message: "Synthetic signing outage" }, 503);
         if (key.startsWith("customer-copies/")) assert.equal(body.expiresIn, 604800);
         const token = randomUUID(); signedLinks.set(token, { key, expiresAt: Date.now() + body.expiresIn * 1000 });
         return json(res, { signedURL: "/object/sign/bills/" + key + "?token=" + token });
@@ -190,7 +195,47 @@ try {
   assert.ok(charlie.uploads.confirmed_at); assert.equal(confirms, 3);
   await submissionTab.close(); // Closing WhatsApp does not undo cashier submission.
   assert.ok(charlie.uploads.confirmed_at);
+  // Two related bills are shown in the preview and sent as one message with two links.
+  await click("Close upload dialog");
+  const sibling = draft("ALPHA-SERVICE", 3, 3);
+  sibling.customer_id = alpha.customer_id; sibling.customer_name = alpha.customer_name;
+  sibling.bill_type = "Service invoice"; sibling.token_number = "002";
+  sibling.uploads.confirmed_at = new Date().toISOString(); sibling.uploads.status = "confirmed";
+  alpha.bill_type = "Body & paint";
+  const hiddenDraft = draft("ALPHA-DRAFT", 1, 1); hiddenDraft.customer_id = alpha.customer_id;
+  const hiddenOwner = draft("ALPHA-OTHER-ADVISOR", 1, 1); hiddenOwner.customer_id = alpha.customer_id;
+  hiddenOwner.uploaded_by = randomUUID(); hiddenOwner.uploads.confirmed_at = new Date().toISOString();
+  await page.reload(); await click("INV-ALPHA");
+  await page.getByText("Preview preset message", { exact: true }).click();
+  const preview = await page.locator(".sd-message-preview").innerText();
+  assert.match(preview, /2 bills/); assert.match(preview, /Body & paint — INV-ALPHA/); assert.match(preview, /Service invoice — INV-ALPHA-SERVICE/);
+  assert.doesNotMatch(preview, /ALPHA-DRAFT|ALPHA-OTHER-ADVISOR|INV-BRAVO/);
+  const beforeGroup = preparations;
+  failBill = sibling.id;
+  const failed = await post(sharing, { customerPhone: "9876543210" });
+  assert.equal(failed.status, 503); assert.equal((await failed.json()).whatsappUrl, undefined);
+  assert.equal(preparations, beforeGroup, "Do not audit or hand off a partial set of links");
+  failBill = null;
+  const groupPopup = context.waitForEvent("page"); await click("Open WhatsApp");
+  const groupTab = await groupPopup; await groupTab.waitForURL("https://wa.me/**");
+  const groupMessage = new URL(groupTab.url()).searchParams.get("text");
+  const groupLinks = groupMessage.split("\n").filter(line => line.startsWith("http"));
+  assert.equal(groupLinks.length, 2); assert.notEqual(groupLinks[0], groupLinks[1]);
+  assert.match(groupMessage, /\*1\. Body & paint — INV-ALPHA\*\nhttp/);
+  assert.match(groupMessage, /\*2\. Service invoice — INV-ALPHA-SERVICE\*\nhttp/);
+  for (const [index, link] of groupLinks.entries()) {
+    const response = await fetch(link); assert.equal(response.status, 200);
+    const parser = new PDFParse({ data: new Uint8Array(await response.arrayBuffer()) });
+    try {
+      const text = (await parser.getText()).text;
+      assert.match(text, index === 0 ? /ALPHA CONTINUATION/ : /CUSTOMER BRAVO/);
+      assert.doesNotMatch(text, index === 0 ? /CUSTOMER BRAVO/ : /CUSTOMER ALPHA/);
+    } finally { await parser.destroy(); }
+  }
+  await groupTab.close();
+  assert.equal(preparations, beforeGroup + 2); assert.equal(confirms, 3);
+  assert.equal(await page.locator(".sd-message-preview").innerText(), groupMessage);
   assert.deepEqual(errors, []);
-  console.log("WhatsApp passed: real route authorization, required tokens, invalid phones, cashier submission despite signing failure, retry without resubmission, isolated PDF pages, private storage, seven-day signing, expiry, recipient correction, popup fallback, skip, reload recovery and intercepted handoff.");
+  console.log("WhatsApp passed: customer-group headings and links, matching preview, private page ranges, draft/owner/customer isolation, all-links-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
 } catch (error) { console.error(appLogs); await page.screenshot({ path: "/tmp/billdesk-whatsapp-failure.png", fullPage: true }).catch(() => {}); throw error; }
 finally { await browser.close(); app.kill("SIGTERM"); await new Promise(resolve => server.close(resolve)); }
