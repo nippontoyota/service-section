@@ -1,4 +1,4 @@
-.sd-app,.sd-login,.sd-loading,.sd-dialog{--sd-ink:#202124;--sd-muted:#67676c;--sd-line:#dedee0;--sd-accent:#eb0a1e;--sd-accent-hover:#cc091a;--sd-accent-wash:#fff1f2;--sd-accent-ink:#c4091a;--sd-bg:#f0f0f0;--sd-subtle:#f7f7f8;color:var(--sd-ink);font-family:"Avenir Next","Segoe UI",sans-serif}
+.sd-app,.sd-login,.sd-loading,.sd-dialog,.sd-auth-transition{--sd-ink:#202124;--sd-muted:#67676c;--sd-line:#dedee0;--sd-accent:#eb0a1e;--sd-accent-hover:#cc091a;--sd-accent-wash:#fff1f2;--sd-accent-ink:#c4091a;--sd-bg:#f0f0f0;--sd-subtle:#f7f7f8;color:var(--sd-ink);font-family:"Avenir Next","Segoe UI",sans-serif}
 .sd-app button,.sd-login button,.sd-loading button,.sd-dialog button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--sd-line);border-radius:8px;background:white;padding:9px 13px;font-size:13px;font-weight:600;transition:background .15s}
 .sd-app button:hover,.sd-login button:hover,.sd-loading button:hover,.sd-dialog button:hover{background:var(--sd-subtle)}
 .sd-app button:disabled,.sd-login button:disabled,.sd-loading button:disabled,.sd-dialog button:disabled{opacity:.5;cursor:wait}
@@ -295,10 +295,10 @@
 .sd-message-preview{white-space:pre-wrap;overflow-wrap:anywhere;padding:14px;background:var(--sd-bg);border-radius:8px;font-size:13px;line-height:1.6}
 .sd-sharing-queue{padding:20px;margin:20px 0;border:1px solid var(--sd-line);border-radius:12px;background:#fff}
 .sd-sharing-queue>p{font-size:13px;color:var(--sd-muted)}
-.sd-whatsapp .sd-whatsapp-action{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:10px;border:0;border-radius:50%;background:#128c4a;color:#fff;text-decoration:none;flex-shrink:0}
-.sd-whatsapp .sd-whatsapp-action:hover:not(:disabled){background:#0c703b}
-.sd-whatsapp .sd-whatsapp-action:focus-visible{outline:3px solid #128c4a;outline-offset:3px}
-.sd-whatsapp .sd-whatsapp-action svg{width:24px;height:24px}
+.sd-whatsapp-action.sd-whatsapp-action{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:10px;border:0;border-radius:50%;background:#128c4a;color:#fff;text-decoration:none;flex-shrink:0}
+.sd-whatsapp-action.sd-whatsapp-action:hover:not(:disabled){background:#0c703b}
+.sd-whatsapp-action.sd-whatsapp-action:focus-visible{outline:3px solid #128c4a;outline-offset:3px}
+.sd-whatsapp-action.sd-whatsapp-action svg{width:24px;height:24px}
 .sd-review-card+.sd-review-card{border-top:1px solid var(--sd-line);margin-top:16px}
 .sd-review-meta{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
 .sd-review-meta>small{flex-shrink:0;background:var(--sd-subtle);padding:2px 7px;border-radius:4px;font-size:10px}
@@ -330,3 +330,26 @@
 
 .sd-payment-form{display:grid;gap:16px;margin:24px 0;max-width:460px}
 .sd-payment-form>button{justify-self:start}
+
+/* Authentication stays in the top layer until the session transition completes. */
+.sd-auth-transition{outline:none;position:fixed;inset:0;width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;border:0;padding:24px;background:#f7f7f8;box-sizing:border-box}
+.sd-auth-transition[open]{display:grid;place-items:center}
+.sd-auth-transition::backdrop{background:#f7f7f8}
+.sd-auth-content{width:min(100%,380px);text-align:center}
+.sd-auth-content .sd-brand{justify-content:center;font-size:32px;margin-bottom:44px;letter-spacing:-1.4px}
+.sd-auth-content .sd-brand>span:first-child{width:54px;height:54px;border-radius:16px;margin-right:14px;animation:sd-auth-pulse 1.6s ease-in-out infinite}
+.sd-auth-content .sd-brand svg{width:29px;height:29px}
+.sd-auth-content h1{font-size:26px;font-weight:650;letter-spacing:-.035em;margin:0 0 12px}
+.sd-auth-content p{font-size:14px;color:var(--sd-muted);line-height:1.6;margin:0}
+.sd-auth-progress{display:flex;justify-content:center;gap:7px;margin:26px 0 52px}
+.sd-auth-progress>span{width:5px;height:5px;border-radius:50%;background:var(--sd-accent);animation:sd-auth-pulse 1.6s ease-in-out infinite}
+.sd-auth-progress>span:nth-child(2){animation-delay:.16s}.sd-auth-progress>span:nth-child(3){animation-delay:.32s}
+.sd-auth-caption{font-size:9px;letter-spacing:.15em;font-weight:650;color:var(--sd-muted)}
+@keyframes sd-auth-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.sd-auth-content .sd-brand>span:first-child,.sd-auth-progress>span{animation:none}}
+.sd-whatsapp-icon{flex-shrink:0;vertical-align:middle}
+.sd-whatsapp-label{display:inline-flex;align-items:center;gap:7px;line-height:1.5}
+.sd-whatsapp-label>.sd-whatsapp-icon{width:16px;height:16px;color:#128c4a}
+.sd-whatsapp-label.is-muted>.sd-whatsapp-icon{color:var(--sd-muted)}
+.sd-whatsapp summary .sd-whatsapp-label{display:inline-flex;vertical-align:middle}
+.sd-alert>.sd-whatsapp-icon{color:#128c4a;margin-right:7px}

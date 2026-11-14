@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { FileText } from "lucide-react";
+import { AuthTransition, Brand } from "./desk-brand";
 import type QrScanner from "qr-scanner";
 import { gateCodeFromLink, type GatePass } from "@/lib/gate-pass";
 import { readApiResponse } from "@/lib/api-response";
@@ -18,6 +18,8 @@ export function SecurityWorkspace({ origin, code }: { origin: string; code?: str
  const [pass, setPass] = useState<GatePass | null>(null);
  const [busy, setBusy] = useState(Boolean(code));
  const [confirmed, setConfirmed] = useState(false);
+ const [signingOut, setSigningOut] = useState(false);
+ const logoutLock = useRef(false);
  useEffect(() => () => { stopped.current = true; scanner.current?.destroy(); }, []);
  async function check(confirm = false) {
   if (!code || inFlight.current) return;
@@ -63,11 +65,19 @@ export function SecurityWorkspace({ origin, code }: { origin: string; code?: str
    if (stopped.current) scanner.current.destroy();
   } catch { scanner.current?.destroy(); scanner.current = null; setScanning(false); setError("Camera unavailable. Paste the customer's BillDesk gate-pass link below."); }
  }
- return <main className="sd-app gate-security"><section className="gate-card">
-  <header><span className="sd-brand"><span><FileText size={22}/></span>Bill<span>Desk</span></span><button onClick={async () => {
-   try { await readApiResponse(await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })); window.location.assign("/"); }
-   catch { setError("Could not sign out. Retry."); }
-  }}>Sign out</button></header>
+ async function logout() {
+  if (logoutLock.current) return;
+  logoutLock.current = true; setSigningOut(true); setError("");
+  stopped.current = true; scanner.current?.stop(); setScanning(false);
+  try {
+   await readApiResponse(await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
+   window.location.assign("/");
+  } catch {
+   logoutLock.current = false; setSigningOut(false); setError("Could not sign out. Retry.");
+  }
+ }
+ return <main className="sd-app gate-security"><AuthTransition action={signingOut ? "out" : null}/><section className="gate-card">
+  <header><Brand/><button disabled={signingOut} onClick={() => void logout()}>Sign out</button></header>
   <p className="sd-eyebrow">SECURITY · VEHICLE EXIT</p><h1>{code ? "Check vehicle" : "Scan gate pass"}</h1>
   {error && <p role="alert" className="sd-warning">{error}</p>}
   {code ? <>

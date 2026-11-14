@@ -101,6 +101,11 @@ try{
  assert.equal((await fetch(link,{method:'HEAD'})).status,200);assert.equal(confirms,1);
  assert.deepEqual(errors,[]);
  await page.screenshot({path:'/tmp/billdesk-gate-security.png'});
- await page.getByRole('button',{name:'Sign out'}).click();await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();
+ let releaseLogout;
+ await page.route('**/api/auth/logout',route=>new Promise(resolve=>{releaseLogout=async(ok)=>{if(ok)await route.continue();else await route.fulfill({status:503,json:{error:'Try again'}});resolve();};}));
+ await page.getByRole('button',{name:'Sign out'}).click();await page.getByRole('dialog',{name:'Signing out…'}).waitFor();
+ await releaseLogout(false);await page.getByText('Could not sign out. Retry.',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Sign out'}).click();await page.getByRole('dialog',{name:'Signing out…'}).waitFor();
+ await releaseLogout(true);await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();
  console.log('Gate-pass browser passed: paid details, Archive, phone validation, blockers, preset WhatsApp/fallback, QR decode, mobile layout, camera denial, strict links, API role restrictions, outage denial, exit and repeat rejection.');
 }catch(e){console.error(log);throw e;}finally{await browser?.close();app.kill();await new Promise(resolve=>server.close(resolve));}
