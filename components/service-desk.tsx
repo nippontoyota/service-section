@@ -247,7 +247,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
         if (result.profile?.role === "security" && !result.profile.must_change_password) {
           window.location.replace("/security"); navigating = true; return;
         }
-        acceptSnapshot(empty, result.profile);
+        // Keep recovery IDs until the first real snapshot arrives.
+        setProfile(result.profile);
         await refreshAfterWrite();
       }
       setMetric("paid"); setCustomerFilter(null);

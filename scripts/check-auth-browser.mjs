@@ -32,11 +32,16 @@ try {
  await loginReply(false);await page.getByRole('alert').filter({hasText:'Invalid user ID or password.'}).last().waitFor();
  assert.equal(await progress.isVisible(),false);assert.equal(await page.getByLabel('User ID',{exact:true}).inputValue(),'cashier01');
  assert.equal(await page.getByLabel('Password',{exact:true}).inputValue(),'test-password');
+ profile.role='service_advisor';
+ await page.evaluate(() => sessionStorage.setItem('desk-sharing-batch:test-cashier','["draft-id"]'));
  loginReply=null;await page.getByRole('button',{name:'Sign in',exact:true}).click();await ready(()=>loginReply);await progress.waitFor();await loginReply(true);
  await page.waitForFunction(()=>performance.getEntriesByType('resource').some(e=>e.name.endsWith('/api/auth/login')));
  // Wait for the workspace request to start, keeping the progress view across both requests.
  await ready(()=>snapshotReply);
- assert.ok(snapshotReply);assert.equal(await progress.isVisible(),true);await snapshotReply();
+ assert.ok(snapshotReply);assert.equal(await progress.isVisible(),true);
+ await page.getByRole('button',{name:'Upload bills',exact:true,includeHidden:true}).waitFor({state:'attached'});
+ assert.equal(await page.evaluate(()=>sessionStorage.getItem('desk-sharing-batch:test-cashier')),'["draft-id"]','Signing in must retain recovery IDs until the real snapshot arrives');
+ await snapshotReply();
  await page.getByRole('button',{name:'Sign out',exact:true}).waitFor();
  await page.emulateMedia({reducedMotion:'reduce'});
  logoutReply=null;await page.getByRole('button',{name:'Sign out',exact:true}).click();await ready(()=>logoutReply);
