@@ -1,13 +1,16 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { AuthTransition, Brand } from "./desk-brand";
+import { Brand } from "./desk-brand";
 import type QrScanner from "qr-scanner";
 import { gateCodeFromLink, type GatePass } from "@/lib/gate-pass";
-import { readApiResponse } from "@/lib/api-response";
+import { requestJson, RequestTimeoutError } from "@/lib/operation";
+import { OperationDialog, useOperation } from "./operation-feedback";
 import "./service-desk.css";
 import "./security-workspace.css";
 
 export function SecurityWorkspace({ origin, code }: { origin: string; code?: string }) {
+ const feedback = useOperation();
+ const uncertain = useRef(false);
  const video = useRef<HTMLVideoElement>(null);
  const scanner = useRef<QrScanner | null>(null);
  const stopped = useRef(false);
@@ -19,30 +22,35 @@ export function SecurityWorkspace({ origin, code }: { origin: string; code?: str
  const [busy, setBusy] = useState(Boolean(code));
  const [confirmed, setConfirmed] = useState(false);
  const [signingOut, setSigningOut] = useState(false);
+ const [logoutUncertain, setLogoutUncertain] = useState(false);
  const logoutLock = useRef(false);
  useEffect(() => () => { stopped.current = true; scanner.current?.destroy(); }, []);
  async function check(confirm = false) {
-  if (!code || inFlight.current) return;
+  if (!code || inFlight.current || (confirm && uncertain.current)) return;
+  if (!feedback.begin(confirm ? "Confirming vehicle exit…" : "Verifying gate pass…")) return;
   inFlight.current = true; setBusy(true); setError(""); setPass(null);
   try {
-   const response = await fetch("/api/gate-passes/" + (confirm ? "confirm-exit" : "verify"), {
+   const result = await requestJson("/api/gate-passes/" + (confirm ? "confirm-exit" : "verify"), {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }), cache: "no-store",
-   });
-   const result = await readApiResponse(response);
+   }, confirm);
+   uncertain.current = false;
    setPass(result); setConfirmed(Boolean(result.confirmed));
-  } catch { setError("Unable to verify—retry"); setConfirmed(false); }
-  finally { inFlight.current = false; setBusy(false); }
+   const success = confirm ? result.confirmed === true : result.status === "Valid";
+   await feedback.finish(success ? "success" : "failure", success ? confirm ? "Vehicle exit confirmed" : "Gate pass verified" : result.status || "Unable to verify", success ? undefined : "This pass does not authorize a new vehicle exit.");
+  } catch (e) {
+   if (e instanceof RequestTimeoutError && e.write) uncertain.current = true;
+   const message = e instanceof RequestTimeoutError ? e.message : "Unable to verify—retry";
+   setError(message); setConfirmed(false);
+   await feedback.finish("failure", uncertain.current ? "Exit result uncertain" : "Unable to verify", message);
+  } finally { inFlight.current = false; setBusy(false); }
  }
  useEffect(() => {
   if (!code) return;
-  // Verification only: neither navigation nor a repeated camera frame consumes a pass.
-  let cancelled = false;
-  inFlight.current = true;
-  fetch("/api/gate-passes/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }), cache: "no-store" })
-   .then(readApiResponse).then(result => { if (!cancelled) setPass(result); })
-   .catch(() => { if (!cancelled) setError("Unable to verify—retry"); })
-   .finally(() => { if (!cancelled) { inFlight.current = false; setBusy(false); } });
-  return () => { cancelled = true; };
+  // Navigation verifies only; it can never confirm an exit.
+  const timer = setTimeout(() => void check(), 0);
+  return () => clearTimeout(timer);
+  // Verification runs once for this route. Button retries use the same operation lock.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [code]);
  function accept(value: string) {
   scanner.current?.stop(); setScanning(false);
@@ -66,20 +74,26 @@ export function SecurityWorkspace({ origin, code }: { origin: string; code?: str
   } catch { scanner.current?.destroy(); scanner.current = null; setScanning(false); setError("Camera unavailable. Paste the customer's BillDesk gate-pass link below."); }
  }
  async function logout() {
-  if (logoutLock.current) return;
+  if (logoutLock.current || logoutUncertain) return;
+  if (!feedback.begin("Signing out…")) return;
   logoutLock.current = true; setSigningOut(true); setError("");
   stopped.current = true; scanner.current?.stop(); setScanning(false);
   try {
-   await readApiResponse(await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
+   await requestJson("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+   await feedback.finish("success", "Signed out");
    window.location.assign("/");
-  } catch {
-   logoutLock.current = false; setSigningOut(false); setError("Could not sign out. Retry.");
+  } catch (e) {
+   const message = e instanceof Error ? e.message : "Could not sign out. Retry.";
+   logoutLock.current = false; setSigningOut(false); setError(message);
+   if (e instanceof RequestTimeoutError) setLogoutUncertain(true);
+   await feedback.finish("failure", "Sign-out could not be confirmed", message);
   }
  }
- return <main className="sd-app gate-security"><AuthTransition action={signingOut ? "out" : null}/><section className="gate-card">
-  <header><Brand/><button disabled={signingOut} onClick={() => void logout()}>Sign out</button></header>
+ return <main className="sd-app gate-security"><OperationDialog operation={feedback.operation} onDismiss={feedback.dismiss}/><section className="gate-card">
+  <header><Brand/><button disabled={signingOut || logoutUncertain} onClick={() => void logout()}>Sign out</button></header>
   <p className="sd-eyebrow">SECURITY · VEHICLE EXIT</p><h1>{code ? "Check vehicle" : "Scan gate pass"}</h1>
   {error && <p role="alert" className="sd-warning">{error}</p>}
+  {logoutUncertain && <button onClick={() => window.location.reload()}>Refresh status</button>}
   {code ? <>
    {!pass && !error && <p role="status">Verifying…</p>}
    {pass && <div aria-live="polite">

@@ -59,6 +59,10 @@ try{
  await context.addCookies([{name:'billdesk_session',value:tokens.cashier,url:base}]);
  const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.open=()=>null;});
+ await page.addLocatorHandler(page.locator('.sd-operation[data-outcome="failure"][open]'), async dialog => {
+  assert.equal(await dialog.locator('.sd-operation-tick').count(),0);
+  await dialog.getByRole('button',{name:'Continue'}).click();
+ });
  await page.goto(base);
  await page.getByRole('button',{name:'UNREAD-TOTAL',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Issue gate pass',exact:true}).count(),0);
@@ -70,7 +74,7 @@ try{
  await page.getByRole('button',{name:/^Archive/}).click();
  for(const note of notes){
   await page.getByRole('button',{name:note.invoice_reference,exact:true}).click();
-  const dialog=page.getByRole('dialog');
+  const dialog=page.getByRole('dialog', {name:/^Bill /});
   assert.match(await dialog.innerText(),/No collection required/);
   assert.doesNotMatch(await dialog.innerText(),/An invoice alone does not confirm payment/);
   assert.equal(await page.getByLabel('Mode of payment').count(),0);
@@ -124,19 +128,24 @@ try{
  for(const path of ['/api/uploads/init',`/api/uploads/${bill.upload_id}/confirm`,`/api/uploads/${bill.upload_id}/process`,`/api/uploads/${bill.upload_id}/delete`,`/api/bills/${bill.id}/delete`,`/api/bills/${bill.id}/whatsapp`,'/api/gate-passes'])assert.equal((await post(path,{billId:bill.id,phone:'+919876543210'})).ok,false);
  assert.equal(calls.length,before,'Denied security operations never reach financial data');
  assert.equal((await post('/api/gate-passes/verify',{code},'cashier')).ok,false);
- fail=true;await page.getByRole('button',{name:'Retry verification'}).click();await page.getByText('Unable to verify—retry',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Confirm exit',exact:true}).count(),0);
+ fail=true;await page.getByRole('button',{name:'Retry verification'}).click();await page.getByText('Unable to verify—retry',{exact:true}).last().waitFor();assert.equal(await page.getByRole('button',{name:'Confirm exit',exact:true}).count(),0);
  assert.equal((await fetch(link)).status,503);fail=false;
  await page.getByRole('button',{name:'Retry verification'}).click();await page.getByRole('button',{name:'Confirm exit',exact:true}).click();await page.getByText('Exit confirmed',{exact:true}).waitFor();assert.equal(confirms,1);
  assert.equal((await (await post('/api/gate-passes/confirm-exit',{code})).json()).status,'Already used');assert.equal(confirms,1);
  await customer.reload();await customer.getByRole('heading',{name:'Already used',exact:true}).waitFor();assert.equal(await customer.getByRole('img').count(),1);
  assert.equal((await fetch(base+'/g/'+'z'.repeat(43))).status,404);
  assert.equal((await fetch(link,{method:'HEAD'})).status,200);assert.equal(confirms,1);
+ await page.goto(base+'/security/verify/'+'z'.repeat(43));
+ await page.getByText('Invalid',{exact:true}).last().waitFor();
+ assert.equal(await page.locator('.sd-operation-tick').count(),0);
+ assert.equal(await page.getByRole('button',{name:'Confirm exit',exact:true}).count(),0);
+ await page.evaluate(()=>document.querySelector('.sd-operation[data-outcome="failure"][open] button')?.click());
  assert.deepEqual(errors,[]);
  await page.screenshot({path:'/tmp/billdesk-gate-security.png'});
  let releaseLogout;
  await page.route('**/api/auth/logout',route=>new Promise(resolve=>{releaseLogout=async(ok)=>{if(ok)await route.continue();else await route.fulfill({status:503,json:{error:'Try again'}});resolve();};}));
  await page.getByRole('button',{name:'Sign out'}).click();await page.getByRole('dialog',{name:'Signing out…'}).waitFor();
- await releaseLogout(false);await page.getByText('Could not sign out. Retry.',{exact:true}).waitFor();
+ await releaseLogout(false);await page.getByText('Try again',{exact:true}).last().waitFor();
  await page.getByRole('button',{name:'Sign out'}).click();await page.getByRole('dialog',{name:'Signing out…'}).waitFor();
  await releaseLogout(true);await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();
  console.log('Gate-pass browser passed: paid details, Archive, phone validation, blockers, preset WhatsApp/fallback, QR decode, mobile layout, camera denial, strict links, API role restrictions, outage denial, exit and repeat rejection.');

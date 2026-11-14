@@ -356,3 +356,22 @@
 .sd-whatsapp-label.is-muted>.sd-whatsapp-icon{color:var(--sd-muted)}
 .sd-whatsapp summary .sd-whatsapp-label{display:inline-flex;vertical-align:middle}
 .sd-alert>.sd-whatsapp-icon{color:#128c4a;margin-right:7px}
+
+/* Native modal headers and footers remain outside the scrolling content. */
+.sd-dialog.sd-dialog{padding:0;overflow:hidden}
+.sd-dialog[open]{display:flex;flex-direction:column}
+.sd-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 24px;border-bottom:1px solid var(--sd-line);flex-shrink:0;background:white}
+.sd-dialog-header h2{font-size:18px;margin:0}
+.sd-dialog-close.sd-dialog-close{position:static;min-width:44px;min-height:44px;display:grid;place-items:center;flex-shrink:0}
+.sd-dialog-body{padding:24px;overflow:auto;min-height:0;overscroll-behavior:contain}
+.sd-upload-footer.sd-upload-footer{position:static;flex-shrink:0;padding:12px 24px;margin:0;max-height:35dvh;overflow:auto}
+.sd-auth-content>.sd-toyota-emblem{width:112px;height:78px;color:#d71920;margin:0 auto 28px}
+.sd-operation[data-outcome="pending"] .sd-toyota-emblem{animation:sd-auth-pulse 1.6s ease-in-out infinite}
+.sd-operation-tick{color:#187443;margin:0 auto 16px}
+.sd-operation .sd-auth-caption{display:block;margin-top:32px}
+.sd-operation button{margin-top:24px;min-height:44px}
+.sd-operation .sd-auth-content p+p{margin-top:16px}
+.sd-whatsapp-action.sd-whatsapp-action{width:auto;min-width:44px;gap:8px;padding:10px 14px;border-radius:8px}
+.sd-sharing-queue:focus{outline:2px solid var(--sd-accent);outline-offset:4px}
+@media(max-width:760px){.sd-dialog-header{padding:8px 16px}.sd-dialog-body{padding:16px}.sd-upload-footer.sd-upload-footer{padding:12px 16px}.sd-upload-footer button{flex-basis:40%}}
+@media(prefers-reduced-motion:reduce){.sd-operation[data-outcome="pending"] .sd-toyota-emblem{animation:none}}

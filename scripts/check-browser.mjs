@@ -7,6 +7,7 @@ const errors=[];
 page.on("pageerror",error=>errors.push(error.message));
 page.on("dialog", dialog=>void dialog.accept(dialog.type()==="prompt" ? "Test correction" : undefined));
 async function login(id,password){
+  await page.locator('.sd-operation[open]').waitFor({state:'hidden'});
   await page.getByLabel("User ID",{exact:true}).fill(id);
   await page.getByLabel("Password",{exact:true}).fill(password);
   await page.getByRole("button",{name:"Sign in",exact:true}).click();
@@ -35,8 +36,7 @@ try {
   assert.match(await page.locator(".sd-review-card").innerText(),/TXA24-23030/);
   await page.getByLabel("Token number (optional)").fill("0012");
   await page.getByRole("button",{name:"Submit all without WhatsApp",exact:true}).click();
-  await page.getByText("0 ready · 0 failed · 0 / 10 PDFs",{exact:true}).waitFor();
-  await page.getByRole("button",{name:"Close upload dialog",exact:true}).click();
+  await page.getByRole("dialog",{name:"Upload and review bills",exact:true}).waitFor({state:"hidden"});
   await page.getByRole("button",{name:"TXA24-23030",exact:true}).waitFor();
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
   await login("cashier01","CashierDemo!2026");
@@ -82,16 +82,17 @@ try {
   assert.equal(await page.getByLabel("Specify other payment method").inputValue(),"");
   await page.getByLabel("Specify other payment method").fill("Bank transfer");
   await page.getByRole("button",{name:/Mark as paid/}).click();
-  await page.getByText("Bill marked as paid and moved to Archive.", {exact:true}).waitFor();
+  await page.getByText("Bill marked as paid and moved to Archive.", {exact:true}).last().waitFor();
   assert.equal(Number(await dailyAnalytics.locator(".sd-metric").nth(1).locator("strong").innerText()), beforePaid + 1);
   assert.equal(Number(await dailyAnalytics.locator(".sd-metric").nth(2).locator("strong").innerText()), beforeUnpaid - 1);
   assert.equal(await dailyAnalytics.locator(".sd-metric").first().locator("strong").innerText(), billedAmount);
+  await page.getByRole("button", {name:"Close bill details",exact:true}).click();
   assert.equal(await page.getByRole("button", {name:"TXA24-23030",exact:true}).count(), 0);
   await page.getByRole("button", {name: /^Archive/}).click();
   await page.getByRole("button", {name:"TXA24-23030",exact:true}).click();
   await page.getByText("Full bill collected",{exact:false}).waitFor();
   assert.match(await page.locator(".sd-payment").innerText(), /Other: Bank transfer/);
-  assert.doesNotMatch(await page.locator("dialog").innerText(),/Part paid|Remaining|Method not stated/);
+  assert.doesNotMatch(await page.locator(".sd-dialog[open]").innerText(),/Part paid|Remaining|Method not stated/);
   await page.getByRole("heading",{name:"This customer’s bills"}).waitFor();
   await page.getByRole("button",{name:"Close bill details"}).click();
   await page.getByRole("button",{name:"Sign out",exact:true}).click();
@@ -123,7 +124,7 @@ try {
   await page.getByRole("button",{name:"ACA/26-27/1145",exact:true}).click();
   assert.match(await page.locator(".sd-related").innerText(),/1 bill/);
   assert.match(await page.locator(".sd-related").innerText(),/40,752/);
-  assert.doesNotMatch(await page.locator("dialog").innerText(),/Part paid|Remaining|₹5,000/);
+  assert.doesNotMatch(await page.locator(".sd-dialog[open]").innerText(),/Part paid|Remaining|₹5,000/);
   await page.getByRole("button",{name:"View original PDF"}).click();
   await page.getByTitle("Original bill PDF").waitFor();
   assert.match(await page.getByTitle("Original bill PDF").getAttribute("src"),/^blob:.*#page=1$/);
@@ -156,4 +157,4 @@ try {
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,"Page must fit mobile width");
   assert.deepEqual(errors,[]);
   console.log("Browser checks passed: upload, extracted amount, PDF preview, one-step payment and archive, admin drill-down, reversal, staff creation with admin-chosen password and mobile layout.");
-} finally { await browser.close(); }
+} catch (error) { console.error(error); await page.screenshot({path:'/tmp/service-demo-failure.png',fullPage:true}).catch(() => {}); throw error; } finally { await browser.close(); }

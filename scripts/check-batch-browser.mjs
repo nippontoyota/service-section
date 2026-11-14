@@ -6,10 +6,11 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFileSync, mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 const { chromium } = await import(process.env.PLAYWRIGHT_PATH ? process.env.PLAYWRIGHT_PATH + "/index.mjs" : "playwright");
 const base = "http://127.0.0.1:3119", backend = "http://127.0.0.1:3120";
-assert(readFileSync(".next/server/app/page.js", "utf8").includes(backend), "Build with NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120 before running this isolated test.");
+const pageTrace = JSON.parse(readFileSync(".next/server/app/page.js.nft.json", "utf8"));
+assert([".next/server/app/page.js", ...pageTrace.files.filter(file => file.endsWith(".js")).map(file => resolve(".next/server/app", file))].some(file => readFileSync(file, "utf8").includes(backend)), "Build with NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120 before running this isolated test.");
 const profile = { id: "test-advisor", staff_id: "advisor01", full_name: "Test Advisor", role: "service_advisor", active: true, must_change_password: false };
 const token = "a".repeat(43), hash = createHash("sha256").update(token).digest("hex");
 const pdf = readFileSync("TXA24-23030.pdf");
@@ -77,6 +78,7 @@ await page.route("**/api/**", async route => {
 });
 await page.route("**/test-upload/*", route => route.fulfill({ status: 200, body: "ok" }));
 const pick = names => page.getByLabel("Add PDFs", { exact: true }).setInputFiles(names.map(name => { const path = join(fixtures, name); if (!existsSync(path)) writeFileSync(path, pdf); return path; }));
+await page.addLocatorHandler(page.locator('.sd-operation[data-outcome="failure"][open]'), dialog => dialog.getByRole('button',{name:'Continue'}).click());
 const click = name => page.getByRole("button", { name, exact: true }).click();
 try {
   for (let n = 0; n < 100; n++) { try { if ((await fetch(base)).ok) break; } catch {} await delay(100); }
@@ -92,8 +94,15 @@ try {
   await click("Close bill details");
   await page.locator(".sd-review-card").nth(1).getByRole("button", { name: "Delete draft", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".sd-review-card").length === 3); assert.equal(bills.filter(b => b.uploads.original_filename === "b.pdf").length, 1);
+  await page.locator('.sd-operation[open]').waitFor({state:'hidden'});
   for (const width of [320,390,768,1440]) {
     await page.setViewportSize({ width, height: 844 }); assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    const uploadDialog = page.getByRole("dialog", {name:"Upload and review bills"});
+    await uploadDialog.locator('.sd-dialog-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
+    const close = await page.getByRole('button',{name:'Close upload dialog'}).boundingBox();
+    const footer = await uploadDialog.locator('.sd-upload-footer').boundingBox();
+    assert(close.width >= 44 && close.height >= 44 && close.y >= 0 && close.y + close.height <= 844);
+    assert(footer.y >= 0 && footer.y + footer.height <= 844);
     const box = await page.getByRole("dialog", { name: "Upload and review bills" }).boundingBox(); assert(box.x >= 0 && box.x + box.width <= width + 1);
     await page.keyboard.press("Tab"); assert(await page.evaluate(() => document.activeElement.closest("dialog") !== null));
     if (width === 1440) { await page.getByRole("dialog", { name: "Upload and review bills" }).evaluate(el => { el.scrollTop = 0; }); await page.screenshot({ path: "/tmp/billdesk-upload-tiles-desktop.png" }); }
@@ -109,7 +118,8 @@ try {
   await page.waitForFunction(() => performance.getEntriesByName("pdf-display").length > 0);
   assert.equal(signedRequests, 1, "Details prefetch and repeated view share the same signed request"); assert.equal(downloadRequests, 1);
   console.log("Controlled first stored-view timings (ms):", await page.evaluate(() => Object.fromEntries(["pdf-authorization","pdf-signing","pdf-download","pdf-display"].map(name => [name, performance.getEntriesByName(name).at(-1)?.duration]))));
-  await click("Close bill details"); await click("Submit all without WhatsApp"); await page.getByText("0 ready · 0 failed · 0 / 10 PDFs", { exact: true }).waitFor();
+  await click("Close bill details"); await click("Submit all without WhatsApp"); await page.getByRole("dialog", {name:"Upload and review bills"}).waitFor({state:"hidden"});
+  await click("Upload bills");
   await pick(Array.from({ length: 12 }, (_, i) => `limit-${i}.pdf`)); assert.equal(await page.locator(".sd-queue-item").count(), 10);
   await pick(["limit-0.pdf"]); assert.equal(await page.locator(".sd-queue-item").count(), 10);
   await click("Close upload dialog");
