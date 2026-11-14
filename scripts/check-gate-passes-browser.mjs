@@ -10,6 +10,10 @@ const base='http://127.0.0.1:3131', backend='http://127.0.0.1:3120';
 const secret='isolated-gate-secret-'.repeat(3), cashier={id:randomUUID(),staff_id:'cashier_test',full_name:'Test Cashier',role:'cashier',active:true,must_change_password:false};
 const guard={...cashier,id:randomUUID(),staff_id:'guard_test',full_name:'Test Guard',role:'security'};
 const bill={id:randomUUID(),upload_id:randomUUID(),customer_id:randomUUID(),customer_name:'Synthetic Customer',customer_phone:'+919876543210',customer_reference:'TEST',vehicle_no_display:'KL01AB1234',vin:'',invoice_reference:'GATE-TEST',invoice_date:'2026-11-14',amount_paise:10000,approval_status:'pending',created_at:new Date().toISOString(),page_from:1,page_to:1,extraction_issues:[],amount_evidence:'Total 100',payment_evidence:[],uploads:{confirmed_at:new Date().toISOString(),original_filename:'synthetic.pdf'}};
+const notes=['warranty_note','amc_note'].map(kind=>({...bill,id:randomUUID(),upload_id:randomUUID(),invoice_reference:kind,amount_paise:null,amount_evidence:'No monetary total stated; supporting note',field_confidence:{document:{kind}}}));
+const unread={...bill,id:randomUUID(),invoice_reference:'UNREAD-TOTAL',amount_paise:null};
+const draft={...notes[0],id:randomUUID(),invoice_reference:'DRAFT-NOTE',uploads:{...bill.uploads,confirmed_at:null}};
+let bills=[...notes,unread,draft];
 const payments=[], calls=[];
 let pass=null, storedHash='', fail=false, blockers=false, confirms=0;
 const tokens={cashier:'a'.repeat(43),guard:'b'.repeat(43)};
@@ -22,11 +26,12 @@ const server=createServer(async(req,res)=>{
   return json(res,profile?{staff_id:profile.id,profiles:profile}:null);
  }
  calls.push(url.pathname);
- if(url.pathname==='/rest/v1/rpc/app_desk_snapshot'){assert.equal(body.staff,cashier.id);return json(res,{bills:[bill],payments,staff:[cashier],audit:[],as_of:new Date().toISOString()});}
+ if(url.pathname==='/rest/v1/rpc/app_desk_snapshot'){assert.equal(body.staff,cashier.id);return json(res,{bills,payments,staff:[cashier],audit:[],as_of:new Date().toISOString()});}
  if(url.pathname==='/rest/v1/rpc/app_desk_action'){assert.equal(body.staff,cashier.id);assert.equal(body.action,'collect');bill.approval_status='approved';payments.push({id:randomUUID(),bill_id:bill.id,amount_paise:10000,method:'Cash',occurred_at:new Date().toISOString(),recorded_by:cashier.id,source:'cashier'});return json(res,null);}
  if(url.pathname==='/rest/v1/rpc/app_issue_gate_pass'){
   assert.equal(body.staff,cashier.id);assert.equal(body.phone,'+919876543210');
-  if(blockers)return json(res,{error:'Payment not cleared.',blockers:[{reference:'UNPAID-OTHER-ADVISOR'}]});
+  assert.ok(bills.some(b=>b.id===body.target&&b.uploads.confirmed_at));
+  if(blockers)return json(res,{error:'Payment not cleared.',blockers:[{reference:blockers}]});
   if(fail)return json(res,{message:'Database unavailable'},503);
   if(!pass){storedHash=body.pass_hash;pass={id:body.pass_id,status:'Valid',customerName:'Synthetic Customer',vehicle:'KL01AB1234',issuer:'Test Cashier',expiresAt:new Date(Date.now()+86400000).toISOString()};}
   return json(res,pass);
@@ -55,6 +60,33 @@ try{
  const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.open=()=>null;});
  await page.goto(base);
+ await page.getByRole('button',{name:'UNREAD-TOTAL',exact:true}).click();
+ assert.equal(await page.getByRole('button',{name:'Issue gate pass',exact:true}).count(),0);
+ await page.getByRole('button',{name:'Close bill details'}).click();
+ assert.equal(await page.getByRole('button',{name:'warranty_note',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'amc_note',exact:true}).count(),0);
+ // A visit containing only no-collection notes can issue from Archive without collection.
+ bills=notes;await page.reload();
+ await page.getByRole('button',{name:/^Archive/}).click();
+ for(const note of notes){
+  await page.getByRole('button',{name:note.invoice_reference,exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  assert.match(await dialog.innerText(),/No collection required/);
+  assert.doesNotMatch(await dialog.innerText(),/An invoice alone does not confirm payment/);
+  assert.equal(await page.getByLabel('Mode of payment').count(),0);
+  assert.equal(await page.getByRole('button',{name:/Mark as paid/}).count(),0);
+  assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'+919876543210');
+  await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
+  await page.getByRole('link',{name:'Open gate pass in WhatsApp'}).waitFor();
+  for(const reference of ['UNPAID-OTHER-ADVISOR','UNREAD-TOTAL']){
+   blockers=reference;await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
+   await page.getByText('Payment not cleared. Bills: '+reference,{exact:true}).last().waitFor();
+   assert.equal(await page.getByRole('link',{name:'Open gate pass in WhatsApp'}).count(),0);
+  }
+  blockers=false;await page.getByRole('button',{name:'Close bill details'}).click();
+ }
+ assert.equal(payments.length,0);assert.ok(!calls.includes('/rest/v1/rpc/app_desk_action'));
+ bills=[bill,...notes];pass=null;await page.reload();
  await page.getByRole('button',{name:'GATE-TEST',exact:true}).click();
  await page.getByLabel('Mode of payment').selectOption('Cash');
  await page.getByRole('button',{name:/Mark as paid/}).click();
@@ -62,7 +94,7 @@ try{
  assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'+919876543210');
  await page.getByLabel('Customer WhatsApp number').fill('');await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
  await page.getByText('Enter a valid customer WhatsApp number with country code',{exact:true}).last().waitFor();
- await page.getByLabel('Customer WhatsApp number').fill('+919876543210');blockers=true;
+ await page.getByLabel('Customer WhatsApp number').fill('+919876543210');blockers='UNPAID-OTHER-ADVISOR';
  await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();await page.getByText(/UNPAID-OTHER-ADVISOR/).last().waitFor();blockers=false;
  await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
  const wa=page.getByRole('link',{name:'Open gate pass in WhatsApp'});await wa.waitFor();

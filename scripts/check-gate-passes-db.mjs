@@ -17,15 +17,32 @@ export async function checkGatePasses(db) {
  const issue = async (target, actor=ids.cashier) => (await db.query("select app_issue_gate_pass($1,$2,'+919876543210',$3,$4) as result", [actor,target,randomUUID(),randomUUID().replaceAll('-','').repeat(2)])).rows[0].result;
  const hash = async id => (await db.query("select code_hash from gate_passes where id=$1",[id])).rows[0].code_hash;
  const check = async (id, confirm=false, actor=ids.guard) => (await db.query("select app_check_gate_pass($1,$2,$3) as result",[actor,await hash(id),confirm])).rows[0].result;
+ for (const kind of ['warranty_note','amc_note']) {
+  const note=await bill({customer:kind,amount:null,kind});
+  const before=(await db.query('select count(*)::int n from payments')).rows[0].n;
+  const notePass=await issue(note); assert.equal(notePass.status,'Valid');
+  assert.equal((await db.query('select count(*)::int n from payments')).rows[0].n,before);
+  assert.equal((await issue(note)).id,notePass.id);
+  assert.equal((await check(notePass.id,true)).confirmed,true);
+  assert.equal((await check(notePass.id,true)).status,'Already used');
+ }
+ const draftNote=await bill({customer:'DRAFT-NOTE',amount:null,kind:'warranty_note',submitted:false});
+ await assert.rejects(issue(draftNote),/submitted bill required/);
+ for (const details of [{customer:'NOTE-NO-VEHICLE',vehicle:''},{customer:'NOTE-NO-NAME',name:''}]) {
+  await assert.rejects(issue(await bill({...details,amount:null,kind:'amc_note'})),/Identified/);
+ }
  const first=await bill(), cross=await bill({advisor:ids.advisor2,vehicle:"kl-01-ab-1234"});
  const otherVehicle=await bill({vehicle:"KL01ZZ9999"});
- await bill({amount:null,kind:"warranty_note"});
+ const note=await bill({amount:null,kind:"warranty_note"});
  await pay(first);
  let blocked=await issue(first); assert.equal(blocked.blockers.length,1); assert.equal(blocked.blockers[0].id,cross);
+ assert.equal((await issue(note)).blockers[0].id,cross);
  await pay(cross);
  const unread=await bill({amount:null}); assert.equal((await issue(first)).blockers[0].id,unread);
+ assert.equal((await issue(note)).blockers[0].id,unread);
  await db.query("update bills set amount_paise=5000 where id=$1",[unread]); await pay(unread);
  const pass=await issue(first); assert.equal(pass.status,"Valid"); assert.equal((await issue(first)).id,pass.id);
+ assert.equal((await issue(note)).id,pass.id);
  assert.equal((await issue(first)).expiresAt,pass.expiresAt);
  assert.equal((await db.query("select count(*)::int n from gate_pass_bills where pass_id=$1",[pass.id])).rows[0].n,4);
  assert.equal((await check(pass.id)).status,"Valid");

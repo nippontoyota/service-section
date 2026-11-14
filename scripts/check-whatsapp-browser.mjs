@@ -24,6 +24,8 @@ function draft(name, from, to) {
   uploads.push(upload); bills.push(bill); return bill;
 }
 const alpha = draft("ALPHA", 1, 2);
+// Exercise the existing advisor submission/retry/popup fallback with a no-amount note.
+Object.assign(alpha, { amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "warranty_note" } } });
 const snapshot = () => ({ bills, drafts: uploads.filter(u => !u.confirmed_at).map(u => ({ ...u, bills: bills.filter(b => b.upload_id === u.id) })), staff: [profile], payments: [], audit, as_of: new Date().toISOString() });
 const json = (res, body, status = 200) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
 const bytes = async req => { const chunks = []; for await (const chunk of req) chunks.push(chunk); return Buffer.concat(chunks); };
@@ -282,6 +284,7 @@ try {
   // A fresh single-bill submission opens its reserved tab automatically.
   await click("Close bill details");
   const charlie = draft("CHARLIE", 1, 2);
+  Object.assign(charlie, { amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "amc_note", billType: "AMC" } } });
   await page.reload(); await click("Upload bills (1)");
   await page.getByLabel("Customer WhatsApp number").fill("9876543213");
   await page.getByLabel("Token number (required)").fill("003");
