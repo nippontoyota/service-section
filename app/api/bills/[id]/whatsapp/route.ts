@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { AuthenticationError, requireRole } from "@/lib/supabase-server";
-import { customerPhone, customerLinkSeconds, customerShareBills, shareBillIds, whatsappMessage, whatsappUrl } from "@/lib/whatsapp";
-import { customerPdf } from "@/lib/pdf/customer-copy";
-import { customerBillOrigin, newCustomerBillLink } from "@/lib/customer-bill-links";
+import { billFilename, customerPhone, customerShareBills, shareBillIds, whatsappMessage, whatsappUrl } from "@/lib/whatsapp";
+import { customerCopyPath, customerPdf } from "@/lib/pdf/customer-copy";
 import type { DeskBill } from "@/lib/desk";
 
 type ShareBill = DeskBill & { uploads: { storage_path: string; confirmed_at: string; file_hash: string | null } };
@@ -45,14 +44,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (billIds && (related.length !== billIds.length || bills.length !== billIds.length || bills.some(current => !billIds.includes(current.id)))) {
       return json({ error: "Every selected bill must be submitted and belong to this customer and your account" }, 409);
     }
-    const origin = customerBillOrigin();
     const bucket = service.storage.from("bills");
     const sources = new Map<string, Uint8Array>();
-    const links: { bill: ShareBill; link: string }[] = [];
-    const mappings: { code_hash: string; bill_id: string; storage_path: string; expires_at: string }[] = [];
-    const expiresAt = new Date(Date.now() + customerLinkSeconds * 1000).toISOString();
     for (const current of bills) {
-      const path = `customer-copies/v1/${current.upload_id}/${current.uploads.file_hash || "original"}/${current.id}-${current.page_from}-${current.page_to}.pdf`;
+      const path = customerCopyPath(current);
       const { data: exists } = await bucket.exists(path);
       if (!exists) {
         let sourceBytes = sources.get(current.upload_id);
@@ -66,20 +61,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         const { error: uploadError } = await bucket.upload(path, bytes, { contentType: "application/pdf", cacheControl: "0", upsert: false });
         if (uploadError && !(await bucket.exists(path)).data) throw new Error("A customer PDF could not be prepared. Please retry.");
       }
-      const { link, codeHash } = newCustomerBillLink(origin);
-      mappings.push({ code_hash: codeHash, bill_id: current.id, storage_path: path, expires_at: expiresAt });
-      links.push({ bill: current, link });
     }
-    // One insert saves the whole set atomically. Raw codes are never persisted.
-    const { error: linkError } = await service.from("customer_bill_links").insert(mappings);
-    if (linkError) throw new Error("All customer bill links could not be saved. Please retry.");
-    // Do not return an incomplete message if any bill failed preparation.
+    // Record preparation only after every private attachment is available.
     for (const current of bills) {
-      const { error: auditError } = await service.rpc("app_prepare_whatsapp", { staff: user.id, target: current.id, phone, expires_at: expiresAt });
+      const { error: auditError } = await service.rpc("app_prepare_whatsapp", { staff: user.id, target: current.id, phone, expires_at: null });
       if (auditError) throw new Error(auditError.code === "PGRST202" ? "WhatsApp sharing requires the latest database migration." : "Could not save WhatsApp preparation. Please retry.");
     }
-    const message = whatsappMessage(links, profile.full_name);
-    return json({ whatsappUrl: whatsappUrl(phone, message), message, billIds: bills.map(bill => bill.id), expiresAt });
+    const message = whatsappMessage(bills.map(bill => ({ bill })), profile.full_name);
+    return json({ whatsappUrl: whatsappUrl(phone, message), message, billIds: bills.map(bill => bill.id), attachments: bills.map(bill => ({ billId: bill.id, filename: billFilename(bill), url: `/api/bills/${bill.id}/attachment` })) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "WhatsApp preparation failed. Please retry.";
     const status = error instanceof AuthenticationError ? 401 : /role required|Same-origin|Password change required/.test(message) ? 403 : 503;

@@ -93,7 +93,15 @@ try{
  bills=[bill,...notes];pass=null;await page.reload();
  await page.getByRole('button',{name:'GATE-TEST',exact:true}).click();
  await page.getByLabel('Mode of payment').selectOption('Cash');
+ let heldPayment;
+ await page.route('**/api/desk', route => route.request().method() === 'POST' ? (heldPayment = route) : route.continue());
  await page.getByRole('button',{name:/Mark as paid/}).click();
+ await page.locator('.sd-dialog .sd-operation-inline').filter({hasText:'Recording payment…'}).waitFor();
+ assert.equal(await page.locator('.sd-operation[open]').count(),0,'Payment uses inline pending');
+ await page.keyboard.press('Escape'); assert.equal(await page.locator('.sd-dialog[open]').count(),1,'Pending payment keeps details open');
+ for(let i=0;i<100 && !heldPayment;i++) await new Promise(resolve=>setTimeout(resolve,10));
+ await heldPayment.continue(); await page.unroute('**/api/desk');
+ await page.getByRole('dialog',{name:'Payment recorded',exact:true}).locator('.sd-operation-tick').waitFor();
  await page.getByRole('button',{name:'Issue gate pass',exact:true}).waitFor();
  assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'+919876543210');
  await page.getByLabel('Customer WhatsApp number').fill('');await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();

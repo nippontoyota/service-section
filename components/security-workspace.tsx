@@ -4,7 +4,7 @@ import { Brand } from "./desk-brand";
 import type QrScanner from "qr-scanner";
 import { gateCodeFromLink, type GatePass } from "@/lib/gate-pass";
 import { requestJson, RequestTimeoutError } from "@/lib/operation";
-import { OperationDialog, useOperation } from "./operation-feedback";
+import { OperationDialog, OperationStatus, useOperation } from "./operation-feedback";
 import "./service-desk.css";
 import "./security-workspace.css";
 
@@ -27,7 +27,7 @@ export function SecurityWorkspace({ origin, code }: { origin: string; code?: str
  useEffect(() => () => { stopped.current = true; scanner.current?.destroy(); }, []);
  async function check(confirm = false) {
   if (!code || inFlight.current || (confirm && uncertain.current)) return;
-  if (!feedback.begin(confirm ? "Confirming vehicle exit…" : "Verifying gate pass…")) return;
+  if (!feedback.begin(confirm ? "Confirming vehicle exit…" : "Verifying gate pass…", undefined, "inline")) return;
   inFlight.current = true; setBusy(true); setError(""); setPass(null);
   try {
    const result = await requestJson("/api/gate-passes/" + (confirm ? "confirm-exit" : "verify"), {
@@ -89,7 +89,7 @@ export function SecurityWorkspace({ origin, code }: { origin: string; code?: str
    await feedback.finish("failure", "Sign-out could not be confirmed", message);
   }
  }
- return <main className="sd-app gate-security"><OperationDialog operation={feedback.operation} onDismiss={feedback.dismiss}/><section className="gate-card">
+ return <main className="sd-app gate-security"><OperationDialog operation={feedback.operation} onDismiss={feedback.dismiss}/><section className="gate-card"><OperationStatus operation={feedback.operation}/>
   <header><Brand/><button disabled={signingOut || logoutUncertain} onClick={() => void logout()}>Sign out</button></header>
   <p className="sd-eyebrow">SECURITY · VEHICLE EXIT</p><h1>{code ? "Check vehicle" : "Scan gate pass"}</h1>
   {error && <p role="alert" className="sd-warning">{error}</p>}

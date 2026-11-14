@@ -11,3 +11,7 @@ export async function customerPdf(bytes: Uint8Array, pageFrom: number, pageTo: n
   pages.forEach(page => output.addPage(page));
   return output.save();
 }
+
+export function customerCopyPath(bill: { id: string; upload_id: string; page_from: number; page_to: number; uploads: { file_hash: string | null } }) {
+  return `customer-copies/v1/${bill.upload_id}/${bill.uploads.file_hash || "original"}/${bill.id}-${bill.page_from}-${bill.page_to}.pdf`;
+}

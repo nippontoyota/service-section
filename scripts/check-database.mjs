@@ -454,5 +454,24 @@ await db.exec("reset role");
 assert.equal((await db.query("select relrowsecurity from pg_class where oid='public.customer_bill_links'::regclass")).rows[0].relrowsecurity, true);
 console.log("Customer bill links passed: server-only access, hash/path constraints, seven-day expiry and atomic group insertion.");
 await (await import("./check-gate-passes-db.mjs")).checkGatePasses(db);
+await db.exec("reset role");
+await db.exec(readFileSync("supabase/migrations/202611140003_bill_attachments.sql", "utf8"));
+const prepareAttachment = (actor = waAdvisor, target = waBill, phone = "+919876543211") => db.query("select app_prepare_whatsapp($1,$2,$3,null)", [actor,target,phone]);
+await db.exec("set role service_role");
+await prepareAttachment();
+const attachmentAudit = (await db.query("select detail from audit_events where bill_id=$1 and action='whatsapp_prepared' and detail->>'mode'='attachment'", [waBill])).rows;
+assert.equal(attachmentAudit.length, 1);
+assert.equal(attachmentAudit[0].detail.expires_at, undefined);
+assert.equal(attachmentAudit[0].detail.phone_last_four, "3211");
+await prepare(); // Legacy callers still supply a future expiry.
+await assert.rejects(prepareAttachment(waCashier), /Service advisor/);
+await assert.rejects(prepareAttachment(waAdvisor, tokenBill), /not accessible/);
+await assert.rejects(prepareAttachment(waAdvisor, waBill, "bad"), /Valid customer/);
+for (const role of ["anon", "authenticated"]) {
+ await db.exec("reset role; set role " + role);
+ await assert.rejects(prepareAttachment(), /permission denied/);
+}
+await db.exec("reset role");
+console.log("Attachment audit passed: private role/owner validation, no fictional expiry, and backward-compatible link preparation.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

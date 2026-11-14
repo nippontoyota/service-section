@@ -5,6 +5,7 @@ import { readApiResponse } from "./api-response";
 export type OperationState = {
   outcome: "pending" | "success" | "failure";
   text: string;
+  pendingDisplay?: "fullscreen" | "inline";
   detail?: string;
   completed?: number;
   total?: number;

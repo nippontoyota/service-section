@@ -54,7 +54,7 @@ export function customerShareBills(selected: DeskBill, candidates: DeskBill[]) {
 }
 
 type MessageBill = Pick<DeskBill, "customer_name" | "invoice_reference" | "vehicle_no_display" | "token_number" | "invoice_date" | "field_confidence" | "bill_type">;
-export function whatsappMessage(bills: { bill: MessageBill; link: string }[], advisor: string) {
+export function whatsappMessage(bills: { bill: MessageBill; link?: string }[], advisor: string) {
   if (!bills.length) throw new Error("At least one bill is required for WhatsApp sharing");
   const customer = bills[0].bill.customer_name;
   const sections = bills.map(({ bill, link }, index) => {
@@ -69,11 +69,18 @@ export function whatsappMessage(bills: { bill: MessageBill; link: string }[], ad
   return [
     `Hello${customer ? " " + customer : ""}, ${bills.length === 1 ? "here is your bill" : `here are your ${bills.length} bills`}.`,
     ...sections,
-    `Please download your ${bills.length === 1 ? "bill" : "bills"} within 7 days.`,
+    bills.some(item => item.link) ? `Please download your ${bills.length === 1 ? "bill" : "bills"} within 7 days.` : "Please find your bill PDFs attached.",
     "Thank you" + (advisor ? ", " + advisor : "") + ".",
   ].join("\n\n");
 }
 
 export function whatsappUrl(phone: string, message: string) {
   return `https://wa.me/${customerPhone(phone).slice(1)}?text=${encodeURIComponent(message)}`;
+}
+
+export type BillAttachment = { billId: string; filename: string; url: string };
+
+export function billFilename(bill: { id: string; invoice_reference: string | null }) {
+  const reference = (bill.invoice_reference || "bill").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 70);
+  return `${reference}-${bill.id}.pdf`;
 }

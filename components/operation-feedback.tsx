@@ -8,14 +8,14 @@ import { ToyotaEmblem } from "./desk-brand";
 export function useOperation() {
   const [operation, setOperation] = useState<OperationState | null>(null);
   const lock = useRef(false);
-  function begin(text: string, total?: number) {
+  function begin(text: string, total?: number, pendingDisplay: "fullscreen" | "inline" = "fullscreen") {
     if (lock.current) return false;
     lock.current = true;
-    setOperation({ outcome: "pending", text, ...(total === undefined ? {} : { completed: 0, total }) });
+    setOperation({ outcome: "pending", text, pendingDisplay, ...(total === undefined ? {} : { completed: 0, total }) });
     return true;
   }
   function progress(text: string, completed?: number, total?: number, files?: OperationState["files"]) {
-    setOperation({ outcome: "pending", text, completed, total, files });
+    setOperation(current => ({ outcome: "pending", text, completed, total, files, pendingDisplay: current?.pendingDisplay }));
   }
   async function finish(outcome: "success" | "failure", text: string, detail?: string) {
     setOperation({ outcome, text, detail });
@@ -34,7 +34,7 @@ export function OperationDialog({ operation, onDismiss }: { operation: Operation
   const previous = useRef<HTMLElement | null>(null);
   const parentDialog = useRef<HTMLDialogElement | null>(null);
   const [slow, setSlow] = useState(false);
-  const outcome = operation?.outcome;
+  const outcome = operation?.outcome === "pending" && operation.pendingDisplay === "inline" ? undefined : operation?.outcome;
   useEffect(() => {
     const node = dialog.current;
     if (outcome && node && !node.open) {
@@ -78,4 +78,9 @@ export function OperationDialog({ operation, onDismiss }: { operation: Operation
       <span className="sd-auth-caption">NIPPON TOYOTA · SERVICE WORKSPACE</span>
     </div>
   </dialog>;
+}
+
+export function OperationStatus({ operation }: { operation: OperationState | null }) {
+  return operation?.outcome === "pending" && operation.pendingDisplay === "inline"
+    ? <p className="sd-operation-inline" role="status" aria-live="polite">{operation.text}</p> : null;
 }

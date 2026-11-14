@@ -85,7 +85,8 @@ const server = createServer(async (req, res) => {
     if (path === "/rest/v1/rpc/app_prepare_whatsapp") {
       const body = JSON.parse(await bytes(req)), bill = bills.find(b => b.id === body.target);
       assert.equal(body.staff, advisorId); assert.ok(bill.uploads.confirmed_at);
-      assert.ok(Date.parse(body.expires_at) > Date.now() + 6.9 * 86400000);
+      assert.equal(body.expires_at, null);
+      if (failMappings) return json(res, {message: "Synthetic preparation failure"}, 503);
       bill.customer_phone = body.phone; preparations++;
       audit.push({ id: randomUUID(), bill_id: bill.id, actor_id: advisorId, action: "whatsapp_prepared", detail: {}, created_at: new Date().toISOString() });
       return json(res, null);
@@ -107,6 +108,7 @@ const server = createServer(async (req, res) => {
     if (path.startsWith(objectPrefix)) {
       if (req.headers.authorization !== "Bearer isolated-test-key") return json(res, { error: "Private storage" }, 403);
       const key = path.slice(objectPrefix.length);
+      if (failBill && key.includes(failBill)) return json(res, {message: "Synthetic copy failure"}, 503);
       if (req.method === "POST") { assert(!storage.has(key)); storage.set(key, await bytes(req)); storageUploads++; return json(res, { Key: "bills/" + key }); }
       storageReads++;
       if (failStorage) return json(res, { message: "Private storage failure: " + key }, 503);
@@ -145,7 +147,7 @@ await page.addLocatorHandler(page.locator('.sd-operation[data-outcome="failure"]
 // Isolate each historical fixture while retaining the active partial-batch recovery record.
 const reload = async () => { await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith('desk-shared-batches:')) sessionStorage.removeItem(key); }); await page.reload(); };
 const closedUpload = () => page.getByRole('dialog', {name:'Upload and review bills'}).waitFor({state:'hidden'});
-const settled = () => page.locator('.sd-operation[open]').waitFor({state:'hidden'});
+const settled = () => page.waitForFunction(() => !document.querySelector('.sd-operation[open], .sd-operation-inline'));
 const click = name => page.getByRole("button", { name, exact: true }).click();
 try {
   for (let n = 0; n < 100; n++) { try { if ((await fetch(base)).ok) break; } catch {} await new Promise(resolve => setTimeout(resolve, 100)); }
@@ -164,22 +166,22 @@ try {
   await context.addCookies([{ name: "billdesk_session", value: session, url: base, httpOnly: true }]);
   await page.goto(base); await click("Upload bills (1)");
   await page.getByLabel("Customer WhatsApp number").fill("bad");
-  await click("Submit & open WhatsApp");
+  await click("Submit & prepare PDFs");
   await page.getByText("Token number is required for every bill at this branch", { exact: true }).last().waitFor();
   await page.getByLabel("Token number (required)").fill("0012");
-  await click("Submit & open WhatsApp");
+  await click("Submit & prepare PDFs");
   await page.getByText("Enter a valid customer WhatsApp number with country code", { exact: true }).last().waitFor();
   assert.equal(confirms, 0);
   await page.getByLabel("Customer WhatsApp number").fill("9876543210");
-  await click("Submit & open WhatsApp");
+  await click("Submit & prepare PDFs");
   await closedUpload();
-  await page.locator('.sd-sharing-queue').getByText(/Bills submitted; message preparation failed/).waitFor();
+  await page.locator('.sd-sharing-queue').getByText(/Bills submitted; PDF preparation failed/).waitFor();
   assert.equal(confirms, 1); assert.equal(preparations, 0); assert.ok(alpha.uploads.confirmed_at);
   assert.equal(storageUploads, 1); assert.equal(handoffs.length, 0);
   // Reproduce a deployment that omitted the route and serves an HTML 404 page.
   const missingRoute = "**/api/bills/*/whatsapp";
   await page.route(missingRoute, route => route.fulfill({ status: 404, contentType: "text/html", body: "<!DOCTYPE html><html>Not found</html>" }));
-  await click("Open WhatsApp");
+  await click("Prepare PDFs");
   await page.locator(".sd-sharing-queue").getByText(/This action is unavailable on the server \(HTTP 404\)/).waitFor();
   assert.doesNotMatch(await page.locator(".sd-notice").last().innerText(), /Unexpected token|DOCTYPE/);
   assert.equal(confirms, 1); assert.equal(preparations, 0); assert.equal(handoffs.length, 0);
@@ -187,23 +189,29 @@ try {
   failMappings = false;
   // Block popups to verify the visible handoff link still works.
   await page.evaluate(() => { window.open = () => null; });
-  await click("Open WhatsApp");
-  const fallback = page.getByRole("link", { name: "Open again", exact: true });
+  await click("Prepare PDFs");
+  const fallback = page.getByRole("link", { name: "Open customer chat", exact: true });
   await fallback.waitFor();
-  assert.equal(await fallback.innerText(), "Open again", "Prepared messages keep a visible fallback label");
+  assert.equal(await fallback.innerText(), "Open customer chat", "Prepared messages keep a visible fallback label");
   assert.equal(await fallback.locator("svg").count(), 1);
-  assert.equal(await page.getByRole("button", { name: "Prepare fresh WhatsApp message" }).count(), 0);
+
   assert.equal(await page.locator(".sd-whatsapp textarea, .sd-whatsapp [contenteditable=true]").count(), 0, "The preset stays read-only");
   assert.equal(confirms, 1); assert.equal(preparations, 1); assert.equal(storageUploads, 1);
   const whatsapp = new URL(await fallback.getAttribute("href"));
   assert.equal(whatsapp.pathname, "/919876543210");
   const message = whatsapp.searchParams.get("text"); assert.match(message, /Token number: 0012/); assert.match(message, /Thank you, Test Advisor/);
-  const link = message.split("\n").find(line => line.startsWith("http"));
-  const download = await fetch(link); assert.equal(download.status, 200);
+  assert.doesNotMatch(message, /https?:|within 7 days/);
+  const attachmentUrl = await page.getByRole("link", {name:"Download PDF 1",exact:true}).getAttribute("href");
+  assert.equal((await fetch(base + attachmentUrl)).status, 401);
+  const attachmentFetch = () => fetch(base + attachmentUrl, {headers:{Cookie:"billdesk_session=" + session}});
+  profile.role = 'cashier'; assert.equal((await attachmentFetch()).status,403); profile.role = 'service_advisor';
+  alpha.uploaded_by = randomUUID(); assert.equal((await attachmentFetch()).status,404); alpha.uploaded_by = advisorId;
+  const confirmedAt = alpha.uploads.confirmed_at;
+  alpha.uploads.confirmed_at = null; assert.equal((await attachmentFetch()).status,409); alpha.uploads.confirmed_at = confirmedAt;
+  const download = await attachmentFetch(); assert.equal(download.status, 200);
   const parser = new PDFParse({ data: new Uint8Array(await download.arrayBuffer()) });
   try { const text = (await parser.getText()).text; assert.match(text, /ALPHA CONTINUATION/); assert.doesNotMatch(text, /BRAVO/); } finally { await parser.destroy(); }
   assert.equal((await fetch(backend + "/storage/v1/object/bills/test.pdf")).status, 403);
-  assert.match(link, /^http:\/\/127\.0\.0\.1:3119\/b\/[A-Za-z0-9_-]{22}$/);
   const privateResponse = response => {
     assert.equal(response.redirected, false);
     assert.equal(response.headers.get("location"), null);
@@ -215,7 +223,14 @@ try {
     assert.doesNotMatch(JSON.stringify([...response.headers]), /customer-copies|isolated-test-key|3120|supabase/);
   };
   privateResponse(download);
-  assert.equal(download.headers.get("content-disposition"), 'inline; filename="bill.pdf"');
+  assert.match(download.headers.get("content-disposition"), /^attachment; filename="INV-ALPHA-/);
+  assert.equal(mappings.size, 0, "Attachment preparation must never create public links");
+  // Seed a previously issued legacy link; it must remain usable until its expiry.
+  const link = base + "/b/" + randomBytes(16).toString("base64url");
+  const copyPath = [...storage.keys()].find(path => path.includes(alpha.id));
+  const savedCopy = storage.get(copyPath); storage.delete(copyPath);
+  assert.equal((await attachmentFetch()).status,404); storage.set(copyPath,savedCopy);
+  mappings.set(codeHash(link), {storage_path:copyPath, expires_at:new Date(Date.now()+86400000).toISOString()});
   for (const method of ["HEAD", "GET", "GET"]) {
     const response = await fetch(link, { method });
     assert.equal(response.status, 200); privateResponse(response);
@@ -243,6 +258,11 @@ try {
   mappings.get(codeHash(link)).expires_at = new Date(Date.now() + 7 * 86400000).toISOString();
   for (const failure of ["database", "storage", "redirect"]) {
     failLookup = failure === "database"; failStorage = failure === "storage"; redirectStorage = failure === "redirect";
+    if (failure !== "database") {
+      const attachmentFailure = await attachmentFetch(); assert.equal(attachmentFailure.status,503);
+      privateResponse(attachmentFailure);
+      assert.doesNotMatch(await attachmentFailure.text(), /customer-copies|3120|isolated-test-key/);
+    }
     for (const method of ["GET", "HEAD"]) {
       const response = await fetch(link, { method });
       assert.equal(response.status, 503); privateResponse(response);
@@ -257,7 +277,7 @@ try {
   assert(largeBytes.length > 4.5 * 1024 * 1024);
   const mappedPath = mappings.get(codeHash(link)).storage_path, savedPdf = storage.get(mappedPath);
   storage.set(mappedPath, largeBytes);
-  const largeResponse = await fetch(link); privateResponse(largeResponse);
+  const largeResponse = await attachmentFetch(); privateResponse(largeResponse);
   assert.equal(largeResponse.status, 200);
   const reader = largeResponse.body.getReader(), firstChunk = await reader.read();
   assert.equal(streamFinished, false, "Customer receives bytes before the upstream finishes");
@@ -267,11 +287,10 @@ try {
   storage.set(mappedPath, savedPdf);
   await page.getByLabel("Customer WhatsApp number").fill("+44 7700 900123");
   assert.equal(await fallback.count(), 0, "Correcting the recipient removes the old handoff");
-  await click("Open WhatsApp"); await fallback.waitFor();
+  await click("Prepare PDFs"); await fallback.waitFor();
   assert.equal(new URL(await fallback.getAttribute("href")).pathname, "/447700900123");
   assert.equal(alpha.customer_phone, "+447700900123");
-  const refreshedLink = new URL(await fallback.getAttribute("href")).searchParams.get("text").split("\n").find(line => line.startsWith("http"));
-  assert.notEqual(refreshedLink, link, "Each preparation issues a fresh code");
+  assert.equal(mappings.size, 1, "Repreparing creates no public links");
   assert.equal((await fetch(link)).status, 200, "Previous links remain usable");
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
@@ -282,35 +301,43 @@ try {
   const bravo = draft("BRAVO", 3, 3);
   await reload(); await click("Upload bills (1)");
   await page.getByLabel("Token number (required)").fill("A-013");
+  let heldSkip;
+  await page.route('**/api/uploads/' + bravo.upload_id + '/confirm', route => { heldSkip = route; });
   await click("Submit all without WhatsApp");
+  await page.locator('.sd-upload-footer .sd-operation-inline').waitFor();
+  assert.equal(await page.locator('.sd-operation[open]').count(),0,'Skipping WhatsApp keeps submission inline');
+  for (let i=0;i<100 && !heldSkip;i++) await new Promise(resolve => setTimeout(resolve,10));
+  await heldSkip.continue(); await page.unroute('**/api/uploads/' + bravo.upload_id + '/confirm');
   await closedUpload(); await settled();
   assert.equal(confirms, 2); assert.equal(bravo.customer_phone, null); assert.ok(bravo.uploads.confirmed_at);
   assert.equal(preparations, 2);
   await closedUpload();
-  // Restored My bills allows sharing a previously skipped bill and a normal automatic handoff.
+  // Sharing a previously skipped bill requires an explicit customer-chat click.
   await reload(); await click("INV-BRAVO");
   await page.getByLabel("Customer WhatsApp number").fill("9876543212");
-  const popup = context.waitForEvent("page"); await click("Open WhatsApp");
+  await click("Prepare PDFs"); await fallback.waitFor(); await settled();
+  const popup = context.waitForEvent("page"); await fallback.click();
   const whatsappTab = await popup; await whatsappTab.waitForURL("https://wa.me/**");
   assert.equal(handoffs.length, 1); assert.equal(confirms, 2);
   assert.equal(new URL(handoffs[0]).pathname, "/919876543212");
   await whatsappTab.close();
-  // A fresh single-bill submission opens its reserved tab automatically.
+  // Single-customer submission prepares PDFs; opening WhatsApp is explicit.
   await page.getByRole("dialog", {name:/^Bill /}).waitFor({state:"hidden"});
   const charlie = draft("CHARLIE", 1, 2);
   Object.assign(charlie, { amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "amc_note", billType: "AMC" } } });
   await reload(); await click("Upload bills (1)");
   await page.getByLabel("Customer WhatsApp number").fill("9876543213");
   await page.getByLabel("Token number (required)").fill("003");
-  const submissionPopup = context.waitForEvent("page");
-  await click("Submit & open WhatsApp");
+  await click("Submit & prepare PDFs"); await fallback.waitFor(); await settled();
+  assert.equal(handoffs.length, 1, "Preparation never opens WhatsApp automatically");
+  const submissionPopup = context.waitForEvent("page"); await fallback.click();
   const submissionTab = await submissionPopup;
   await submissionTab.waitForURL("https://wa.me/**");
   assert.equal(new URL(submissionTab.url()).pathname, "/919876543213");
   assert.ok(charlie.uploads.confirmed_at); assert.equal(confirms, 3);
   await submissionTab.close(); // Closing WhatsApp does not undo cashier submission.
   assert.ok(charlie.uploads.confirmed_at);
-  // Two related bills are shown in the preview and sent as one message with two links.
+  // Two related bills have separate PDF attachments and a shared message.
   await closedUpload();
   const sibling = draft("ALPHA-SERVICE", 3, 3);
   sibling.customer_id = alpha.customer_id; sibling.customer_name = alpha.customer_name;
@@ -340,16 +367,18 @@ try {
   assert.equal(preparations, beforeGroup, "Do not audit or hand off a partial set of links");
   assert.equal(mappings.size, mappingsBeforeGroup);
   failBill = null;
-  const groupPopup = context.waitForEvent("page"); await click("Open WhatsApp");
+  await click("Prepare PDFs"); await fallback.waitFor(); await settled();
+  const groupPopup = context.waitForEvent("page"); await fallback.click();
   const groupTab = await groupPopup; await groupTab.waitForURL("https://wa.me/**");
   const groupMessage = new URL(groupTab.url()).searchParams.get("text");
-  const groupLinks = groupMessage.split("\n").filter(line => line.startsWith("http"));
+  assert.doesNotMatch(groupMessage, /https?:|within 7 days/);
+  const groupLinks = await page.locator(".sd-attachments a[download]").evaluateAll(nodes => nodes.map(node => node.href));
   assert.doesNotMatch(groupMessage, /customer-copies|supabase|3120/);
   assert.equal(groupLinks.length, 2); assert.notEqual(groupLinks[0], groupLinks[1]);
-  assert.match(groupMessage, /\*1\. Body & paint — INV-ALPHA\*\nhttp/);
-  assert.match(groupMessage, /\*2\. Service invoice — INV-ALPHA-SERVICE\*\nhttp/);
+  assert.match(groupMessage, /\*1\. Body & paint — INV-ALPHA\*/);
+  assert.match(groupMessage, /\*2\. Service invoice — INV-ALPHA-SERVICE\*/);
   for (const [index, link] of groupLinks.entries()) {
-    const response = await fetch(link); assert.equal(response.status, 200);
+    const response = await fetch(link, {headers:{Cookie:"billdesk_session="+session}}); assert.equal(response.status, 200);
     const parser = new PDFParse({ data: new Uint8Array(await response.arrayBuffer()) });
     try {
       const text = (await parser.getText()).text;
@@ -366,14 +395,6 @@ try {
   assert.equal(new URL(reopenedTab.url()).searchParams.get("text"), groupMessage);
   assert.equal(preparations, beforeGroup + 2, "Reopening reuses the ready preset");
   await reopenedTab.close();
-  // Expired messages refresh from the same icon without an extra advisor action.
-  await page.evaluate(() => { const now = Date.now(); Date.now = () => now + 8 * 86400000; });
-  const renewal = context.waitForEvent("page"); await fallback.click();
-  const renewedTab = await renewal; await renewedTab.waitForURL("https://wa.me/**");
-  assert.equal(preparations, beforeGroup + 4);
-  assert.notEqual(new URL(renewedTab.url()).searchParams.get("text"), groupMessage);
-  await renewedTab.close();
-  await page.screenshot({ path: "/tmp/billdesk-whatsapp-icon.png", fullPage: true });
   // Explicit batch selections reject the whole request before making any links.
   const beforeDenied = mappings.size;
   for (const ids of [[alpha.id, bravo.id], [alpha.id, hiddenDraft.id], [alpha.id, hiddenOwner.id], [alpha.id, randomUUID()]]) {
@@ -401,7 +422,7 @@ try {
   for (const bill of batch) assert.ok(batchPreview.includes(bill.invoice_reference));
   assert.doesNotMatch(batchPreview, /INV-ALPHA/);
   const beforeBatch = confirms, beforeBatchPrep = preparations;
-  await click('Submit & open WhatsApp');
+  await click('Submit & prepare PDFs');
   await page.getByText('Token number is required for every bill at this branch', {exact:true}).last().waitFor();
   assert.equal(confirms, beforeBatch, 'Preflight must not submit a partial batch');
   await review.getByLabel('Token number (required)').nth(2).fill('B-2');
@@ -409,11 +430,11 @@ try {
   await review.getByRole('button', {name:'View bill',exact:true}).first().click();
   const batchDetails = page.getByRole('dialog', {name:'Bill INV-BATCH-1',exact:true});
   assert.equal(await batchDetails.getByLabel('Customer WhatsApp number').inputValue(), '9876543214');
-  await batchDetails.getByRole('button', {name:'Submit & open WhatsApp',exact:true}).click();
+  await batchDetails.getByRole('button', {name:'Submit & prepare PDFs',exact:true}).click();
   await page.getByText('Synthetic submission failure', {exact:true}).waitFor();
   await page.getByText('Finish submitting or remove this customer’s remaining PDFs before sharing.', {exact:true}).waitFor();
   assert.equal(confirms, beforeBatch + 2); assert.equal(preparations, beforeBatchPrep);
-  assert.equal(await page.getByRole('button', {name:'Open WhatsApp',exact:true}).isDisabled(), true);
+  assert.equal(await page.getByRole('button', {name:'Prepare PDFs',exact:true}).isDisabled(), true);
   assert.ok(batch.slice(0,2).every(b => b.customer_phone === '+919876543214'));
   assert.equal(await review.getByLabel('Customer WhatsApp number').inputValue(), '9876543214');
   await click('Retry submission');
@@ -422,15 +443,16 @@ try {
   await reload(); await click('Upload bills (1)');
   await page.evaluate(() => { window.open = () => null; });
   assert.equal(await review.getByLabel('Customer WhatsApp number').inputValue(), '+919876543214');
-  assert.equal(await page.getByRole('button', {name:'Open WhatsApp',exact:true}).isDisabled(), true);
+  assert.equal(await page.getByRole('button', {name:'Prepare PDFs',exact:true}).isDisabled(), true);
   await review.getByLabel('Token number (required)').fill('B-2');
   failConfirm = null;
-  await click('Submit & open WhatsApp');
-  const batchLink = page.getByRole('link', {name:'Open again',exact:true});
+  await click('Submit & prepare PDFs');
+  const batchLink = page.getByRole('link', {name:'Open customer chat',exact:true});
   await batchLink.waitFor();
   assert.equal(confirms, beforeBatch + 3); assert.equal(preparations, beforeBatchPrep + 3);
   const batchMessage = new URL(await batchLink.getAttribute('href')).searchParams.get('text');
-  assert.equal(batchMessage.split('\n').filter(line => line.startsWith('http')).length, 3);
+  assert.doesNotMatch(batchMessage, /https?:/);
+  assert.equal(await page.locator('.sd-attachments a[download]').count(),3);
   for (const bill of batch) assert.ok(batchMessage.includes(bill.invoice_reference));
   assert.doesNotMatch(batchMessage, /INV-ALPHA|INV-BRAVO|INV-CHARLIE/);
   assert.ok(batch.every(b => b.customer_phone === '+919876543214'));
@@ -477,23 +499,25 @@ try {
   assert.equal(await page.locator('.sd-sharing-queue article').count(), 2);
   assert.match(await page.locator('.sd-sharing-queue').innerText(), /MIXED-A — 2 bills/);
   assert.match(await page.locator('.sd-sharing-queue').innerText(), /MIXED-B — 1 bill/);
-  assert.equal(await page.getByRole('button', {name:'Open WhatsApp',exact:true}).count(), 2);
+  assert.equal(await page.getByRole('button', {name:'Prepare PDFs',exact:true}).count(), 2);
   await page.evaluate(() => { window.open = () => null; });
-  await page.getByRole('button', {name:'Open WhatsApp',exact:true}).first().click();
+  await page.getByRole('button', {name:'Prepare PDFs',exact:true}).first().click();
   await batchLink.waitFor();
   const mixedUrlA = new URL(await batchLink.getAttribute('href'));
   assert.equal(mixedUrlA.pathname, '/919876543215');
   const mixedMessageA = mixedUrlA.searchParams.get('text');
-  assert.equal(mixedMessageA.split('\n').filter(line => line.startsWith('http')).length, 2);
+  assert.doesNotMatch(mixedMessageA, /https?:/);
+  assert.equal(await page.locator('.sd-sharing-queue article').first().locator('a[download]').count(),2);
   assert.equal(await page.locator('.sd-sharing-queue article').count(), 2);
   assert.match(mixedMessageA, /INV-MIXED-A-EXTRA/); assert.doesNotMatch(mixedMessageA, /INV-MIXED-B|INV-BATCH/);
-  await page.getByRole('button', {name:'Open WhatsApp',exact:true}).click();
-  await page.waitForFunction(() => document.querySelectorAll('.sd-sharing-queue a[aria-label="Open again"]').length === 2);
+  await page.getByRole('button', {name:'Prepare PDFs',exact:true}).click();
+  await page.waitForFunction(() => document.querySelectorAll('.sd-sharing-queue a[href^="https://wa.me/"]').length === 2);
   const mixedLinks = await batchLink.all();
   const mixedUrlB = new URL(await mixedLinks[1].getAttribute('href'));
   assert.equal(mixedUrlB.pathname, '/919876543216');
   const mixedMessageB = mixedUrlB.searchParams.get('text');
-  assert.equal(mixedMessageB.split('\n').filter(line => line.startsWith('http')).length, 1);
+  assert.doesNotMatch(mixedMessageB, /https?:/);
+  assert.equal(await page.locator('.sd-sharing-queue article').nth(1).locator('a[download]').count(),1);
   assert.equal(await mixedLinks[0].getAttribute('href'), mixedUrlA.href, 'Preparing B retains A’s link');
   assert.match(mixedMessageB, /INV-MIXED-B/); assert.doesNotMatch(mixedMessageB, /INV-MIXED-A/);
   await closedUpload();
@@ -501,16 +525,46 @@ try {
   Object.assign(later, {customer_id:mixedA.customer_id,customer_reference:mixedA.customer_reference,customer_name:mixedA.customer_name,token_number:'NEXT'});
   await click('Refresh'); await click('Upload bills (1)');
   assert.equal(await review.getByLabel('Customer WhatsApp number').inputValue(), '+919876543215');
-  await click('Submit & open WhatsApp');
-  await page.waitForFunction(() => document.querySelectorAll('.sd-sharing-queue a[aria-label="Open again"]').length === 3);
+  await click('Submit & prepare PDFs');
+  await page.waitForFunction(() => document.querySelectorAll('.sd-sharing-queue a[href^="https://wa.me/"]').length === 3);
   const nextMessage = new URL(await batchLink.last().getAttribute('href')).searchParams.get('text');
   assert.match(nextMessage, /INV-MIXED-A-NEXT/);
   assert.doesNotMatch(nextMessage, /INV-MIXED-A-EXTRA|INV-MIXED-B/);
-  assert.equal(nextMessage.split('\n').filter(line => line.startsWith('http')).length, 1);
+  assert.doesNotMatch(nextMessage, /https?:/);
   await page.screenshot({path:'/tmp/billdesk-customer-batches.png',fullPage:true});
   await page.reload();
   await page.locator('.sd-sharing-queue').waitFor();
   assert.equal(await page.locator('.sd-sharing-queue article').count(), 3);
+  await page.evaluate(() => {
+    window.sharedFiles = [];
+    Object.defineProperty(navigator, 'canShare', {configurable:true,value: data => Boolean(data.files?.every(f => f.type === 'application/pdf'))});
+    Object.defineProperty(navigator, 'share', {configurable:true,value: async data => {
+      if (window.cancelShare) throw new DOMException('Cancelled', 'AbortError');
+      if (window.failShare) throw new DOMException('Unavailable', 'NotAllowedError');
+      window.sharedFiles = await Promise.all(data.files.map(async f => ({name:f.name,size:f.size,type:f.type})));
+    }});
+  });
+  const firstCard = page.locator('.sd-sharing-queue article').first();
+  await firstCard.getByRole('button',{name:'Prepare PDFs',exact:true}).click();
+  await firstCard.getByRole('button',{name:'Share PDFs',exact:true}).waitFor(); await settled();
+  await page.evaluate(() => { window.cancelShare = true; });
+  await firstCard.getByRole('button',{name:'Share PDFs',exact:true}).click();
+  assert.equal(await firstCard.getByRole('alert').count(),0);
+  await page.evaluate(() => { window.cancelShare = false; });
+  await firstCard.getByRole('button',{name:'Share PDFs',exact:true}).click();
+  await page.waitForFunction(() => window.sharedFiles.length === 2);
+  assert((await page.evaluate(() => window.sharedFiles)).every(f => f.size > 0 && f.type === 'application/pdf'));
+  await page.evaluate(() => { window.failShare = true; });
+  await firstCard.getByRole('button',{name:'Share PDFs',exact:true}).click();
+  await firstCard.getByText('Sharing is unavailable. Download the PDFs and attach them in WhatsApp.').waitFor();
+  const downloaded = page.waitForEvent('download');
+  await firstCard.getByRole('link',{name:'Download PDF 1',exact:true}).click();
+  assert.match((await downloaded).suggestedFilename(), /\.pdf$/);
+  // Multi-file sharing unsupported: keep the desktop download/chat path available.
+  await page.evaluate(() => Object.defineProperty(navigator,'canShare',{configurable:true,value: data => data.files.length === 1}));
+  await firstCard.getByRole('button',{name:'Prepare again',exact:true}).click(); await settled();
+  assert.equal(await firstCard.getByRole('button',{name:'Share PDFs',exact:true}).count(),0);
+  assert.equal(await firstCard.locator('a[download]').count(),2);
   const uncertainBill = draft('TIMEOUT', 1, 1); uncertainBill.token_number = 'T';
   await reload(); await click('Upload bills (1)');
   await page.getByLabel('Customer WhatsApp number').fill('9876543217');
@@ -521,13 +575,13 @@ try {
   await page.route('**/api/uploads/' + uncertainBill.upload_id + '/confirm', async route => {
     await route.fetch(); committed = true; // Commit on the server, lose the foreground response.
   });
-  await click('Submit & open WhatsApp');
+  await click('Submit & prepare PDFs');
   for (let i = 0; i < 100 && !committed; i++) await new Promise(resolve => setTimeout(resolve,20));
   assert.equal(committed,true);
   await page.clock.fastForward(120_100);
   await page.getByText(/Its result is uncertain/).last().waitFor();
   await page.evaluate(() => document.querySelector('.sd-operation[data-outcome="failure"][open] button')?.click());
-  assert.equal(await page.getByRole('button',{name:'Submit & open WhatsApp',exact:true}).isDisabled(),true);
+  assert.equal(await page.getByRole('button',{name:'Submit & prepare PDFs',exact:true}).isDisabled(),true);
   assert.equal(confirms,beforeTimeout+1);
   await click('Refresh status'); await settled();
   assert.equal(await page.locator('.sd-queue-item').count(),0,'Confirmed timed-out PDFs must leave the retry queue after refresh');
@@ -535,11 +589,11 @@ try {
   await click('Close upload dialog');
   assert.equal(await page.locator('.sd-sharing-queue article').count(),1);
   await page.unroute('**/api/uploads/' + uncertainBill.upload_id + '/confirm');
-  await click('Open WhatsApp'); await batchLink.waitFor();
+  await click('Prepare PDFs'); await batchLink.waitFor();
   const recoveredMessage = new URL(await batchLink.getAttribute('href')).searchParams.get('text');
   assert.match(recoveredMessage,/INV-TIMEOUT/);
-  assert.equal(recoveredMessage.split('\n').filter(line => line.startsWith('http')).length,1);
+  assert.doesNotMatch(recoveredMessage, /https?:/);
   assert.deepEqual(errors, []);
-  console.log("WhatsApp passed: grouped batch contacts, explicit bill selection, partial retries/reload recovery, mixed customers, later-batch isolation, short hashed links, anonymous GET/HEAD, streaming >4.5 MB, no storage leaks, safe failures, customer-group headings and links, matching preview, private page ranges, draft/owner/customer isolation, all-links-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
+  console.log("WhatsApp attachments passed: native share/cancel/failure, desktop downloads, no generated public links, legacy links retained, grouped batch contacts, explicit bill selection, partial retries/reload recovery, mixed customers, later-batch isolation, short hashed links, anonymous GET/HEAD, streaming >4.5 MB, no storage leaks, safe failures, customer-group headings and attachments, matching preview, private page ranges, draft/owner/customer isolation, all-copies-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
 } catch (error) { console.error(appLogs); await page.screenshot({ path: "/tmp/billdesk-whatsapp-failure.png", fullPage: true }).catch(() => {}); throw error; }
 finally { await browser.close(); app.kill("SIGTERM"); await new Promise(resolve => server.close(resolve)); }

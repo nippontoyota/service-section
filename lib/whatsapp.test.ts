@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import { PDFParse } from "pdf-parse";
-import { billContacts, customerContactKey, customerPhone, customerLinkSeconds, customerShareBills, savedCustomerPhone, shareBillIds, whatsappMessage, whatsappUrl } from "./whatsapp";
+import { billContacts, customerContactKey, customerPhone, billFilename, customerLinkSeconds, customerShareBills, savedCustomerPhone, shareBillIds, whatsappMessage, whatsappUrl } from "./whatsapp";
 import { customerPdf } from "./pdf/customer-copy";
 import { fixtureSnapshot } from "./test-fixtures";
 import { customerBillCode, customerBillOrigin, hashBillCode, newCustomerBillLink } from "./customer-bill-links";
@@ -133,4 +133,14 @@ test("customer PDF includes only the bill pages, including continuation pages", 
     } finally { await parser.destroy(); }
   }
   for (const [from, to] of [[0, 1], [2, 1], [1, 4], [1.5, 2]]) await assert.rejects(customerPdf(bytes, from, to), /page range/);
+});
+
+test("attachment messages contain no hosted URL or expiry and filenames are safe", () => {
+  const bill = { ...fixtureSnapshot().bills[0], invoice_reference: 'INV/123\r\n"x', token_number: "001" };
+  const message = whatsappMessage([{ bill }], "Advisor");
+  assert.match(message, /PDFs attached/);
+  assert.match(message, /Token number: 001/);
+  assert.doesNotMatch(message, /https?:|within 7 days/);
+  assert.match(billFilename(bill), /^INV-123-x-[a-zA-Z0-9-]+\.pdf$/);
+  assert.notEqual(billFilename(bill), billFilename({ ...bill, id: "another" }));
 });

@@ -384,3 +384,10 @@
 .sd-operation-files span{display:block;font-size:13px;overflow-wrap:anywhere}
 .sd-operation-files small{display:block;font-size:12px;color:var(--sd-muted);margin-top:4px}
 .sd-operation{overflow-y:auto}
+
+.sd-operation-inline { padding: .6rem 1rem; color: var(--sd-muted, #555); font-size: .9rem; }
+
+.sd-attachments ul { padding-left: 1.2rem; }
+.sd-attachments li { margin-block: .7rem; overflow-wrap: anywhere; }
+.sd-attachments a { text-decoration: underline; }
+.sd-attachments small { display: block; }

@@ -22,20 +22,20 @@ try {
     pending = route;
   });
   const button = name => page.getByRole('button',{name,exact:true});
-  const settled = () => page.locator('.sd-operation[open]').waitFor({state:'hidden'});
+  const settled = () => page.waitForFunction(() => !document.querySelector('.sd-operation[open], .sd-operation-inline'));
   await page.goto(base);
   await page.getByLabel('User ID',{exact:true}).fill('admin01'); await page.getByLabel('Password',{exact:true}).fill('test-password'); await button('Sign in').click();
   await button('Staff accounts').click();
   await page.clock.install();
   const fillAccount = async id => { await page.getByLabel('Full name',{exact:true}).fill('Synthetic Staff'); await page.getByLabel('User ID',{exact:true}).fill(id); await page.getByLabel('Password',{exact:true}).fill('abcdef'); };
   await fillAccount('staff01'); await button('Create account').click();
-  const creating = page.getByRole('dialog',{name:'Creating staff account…',exact:true}); await creating.waitFor();
+  const creating = page.locator('.sd-operation-inline').filter({hasText:'Creating staff account…'}); await creating.waitFor();
   await button('Create account').dispatchEvent('click'); assert.equal(writes,1);
+  assert.equal(await page.getByLabel('Full name',{exact:true}).isDisabled(),true,'Pending writes protect entered values');
+  assert(await page.locator('.sd-main').evaluate(el => el.getBoundingClientRect().top < 5),'Inline status must not displace the workspace grid');
+  assert.equal(await page.locator('.sd-operation[open]').count(),0,'Routine writes must not open the loading dialog');
   await page.clock.fastForward(15_100);
-  await creating.getByText(/Still processing…/).waitFor();
-  assert.equal(await creating.locator('.sd-toyota-emblem').evaluate(el => getComputedStyle(el).animationDuration),'1.6s');
-  await page.emulateMedia({reducedMotion:'reduce'});
-  assert.equal(await creating.locator('.sd-toyota-emblem').evaluate(el => getComputedStyle(el).animationName),'none');
+  assert.equal(await page.locator('.sd-operation[open]').count(),0);
   staff.push({...profile,id:'staff',staff_id:'staff01',full_name:'Synthetic Staff',role:'service_advisor'});
   failRefresh = true;
   await pending.fulfill({json:{ok:true}});
@@ -48,7 +48,8 @@ try {
   for (const [action,label] of [['Disable','Changing staff access…'],['Reset password','Resetting staff password…'],['Delete account','Deleting staff account…']]) {
     pending = null;
     await row.getByRole('button',{name:action,exact:true}).click();
-    await page.getByRole('dialog',{name:label,exact:true}).waitFor();
+    await page.locator('.sd-operation-inline').filter({hasText:label}).waitFor();
+    assert.equal(await page.locator('.sd-operation[open]').count(),0);
     if (action === 'Disable') staff[1].active = false;
     if (action === 'Delete account') staff.pop();
     await pending.fulfill({json: action === 'Reset password' ? {temporaryPassword:'synthetic-password'} : {ok:true}});
@@ -73,11 +74,11 @@ try {
   profile.must_change_password = true;
   await button('Refresh').click(); await settled();
   await page.getByLabel('New password').fill('synthetic-new-password');
-  await button('Save password').click(); await page.getByRole('dialog',{name:'Changing password…',exact:true}).waitFor();
+  await button('Save password').click(); await page.locator('.sd-operation-inline').filter({hasText:'Changing password…'}).waitFor();
   profile.must_change_password = false;
   await pending.fulfill({json:{ok:true}}); await settled();
   await button('Staff accounts').waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Operation browser passed: contextual staff/password feedback, immediate progress, synchronous duplicate lock, 15-second explanation, reduced motion, confirmed writes with refresh warnings, 120-second uncertain timeout, preserved forms, mandatory status refresh and no resubmission.');
+  console.log('Operation browser passed: contextual staff/password feedback, inline pending without a modal, retained success screen, synchronous duplicate lock, confirmed writes with refresh warnings, 120-second uncertain timeout, preserved forms, mandatory status refresh and no resubmission.');
 } catch (error) { console.error(logs); throw error; }
 finally { await browser?.close(); app.kill(); }

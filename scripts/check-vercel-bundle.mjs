@@ -26,10 +26,10 @@ try {
   for (const path of required) assert(!excluded.has(path), `Deployment source excluded by .vercelignore: ${path}`);
   for (const path of privateFiles) assert(excluded.has(path), `Private file allowed by .vercelignore: ${path}`);
 
-  for (const route of ["api/uploads/[id]/process", "api/desk", "api/bills/[id]/whatsapp", "b/[code]", "g/[code]"]) {
+  for (const route of ["api/uploads/[id]/process", "api/desk", "api/bills/[id]/whatsapp", "api/bills/[id]/attachment", "b/[code]", "g/[code]"]) {
     const trace = resolve(root, ".next/server/app", route, "route.js.nft.json");
     const { files } = JSON.parse(readFileSync(trace, "utf8"));
-    if (route.startsWith("api/")) {
+    if (route.startsWith("api/") && !route.endsWith("/attachment")) {
       assert(files.some(file => file.endsWith("/pdf.worker.mjs")), `${route}: missing PDF worker`);
       assert(files.some(file => /canvas.*\.node$/.test(file)), `${route}: missing native canvas`);
     }
