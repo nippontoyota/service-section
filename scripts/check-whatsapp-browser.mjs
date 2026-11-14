@@ -17,7 +17,7 @@ const original = Buffer.from(await source.save());
 const storage = new Map([["test.pdf", original]]), signedLinks = new Map(), mappings = new Map();
 const codeHash = link => createHash("sha256").update(new URL(link).pathname.slice(3)).digest("hex");
 const bills = [], uploads = [], audit = [];
-let confirms = 0, preparations = 0, failMappings = true, storageUploads = 0, failBill = null, failLookup = false, failStorage = false, redirectStorage = false, storageReads = 0, mappingReads = 0, streamFinished = false;
+let confirms = 0, preparations = 0, failMappings = true, storageUploads = 0, failBill = null, failConfirm = null, failLookup = false, failStorage = false, redirectStorage = false, storageReads = 0, mappingReads = 0, streamFinished = false;
 function draft(name, from, to) {
   const upload = { id: randomUUID(), original_filename: name + ".pdf", storage_path: "test.pdf", confirmed_at: null, file_hash: createHash("sha256").update(name).digest("hex"), status: "review" };
   const bill = { id: randomUUID(), upload_id: upload.id, uploaded_by: advisorId, customer_name: name, customer_reference: name, customer_id: name, customer_phone: null, token_number: null, invoice_reference: "INV-" + name, vehicle_no_display: "KL01AB1234", vin: "", invoice_date: "2026-11-11", amount_paise: 10000, approval_status: "pending", approved_at: null, approved_by: null, created_at: new Date().toISOString(), page_from: from, page_to: to, amount_evidence: "Total 100", extraction_issues: [], payment_evidence: [], uploads: upload };
@@ -55,6 +55,10 @@ const server = createServer(async (req, res) => {
     if (path === "/rest/v1/rpc/app_desk_snapshot") return json(res, snapshot());
     if (path === "/rest/v1/uploads") return json(res, snapshot().drafts);
     if (path === "/rest/v1/bills") {
+      if (url.searchParams.get("id")?.startsWith("in.(")) {
+        const ids = url.searchParams.get("id").slice(4, -1).split(',');
+        return json(res, bills.filter(b => ids.includes(b.id) && "eq." + b.uploaded_by === url.searchParams.get("uploaded_by")));
+      }
       if (url.searchParams.has("customer_id")) {
         assert.equal(url.searchParams.get("uploaded_by"), "eq." + advisorId);
         assert.equal(url.searchParams.get("uploads.confirmed_at"), "not.is.null");
@@ -66,6 +70,7 @@ const server = createServer(async (req, res) => {
     if (path === "/rest/v1/rpc/app_confirm_upload") {
       const body = JSON.parse(await bytes(req));
       const upload = uploads.find(u => u.id === body.target);
+      if (upload.id === failConfirm) return json(res, { code: "P0001", message: "Synthetic submission failure" }, 400);
       assert.equal(body.require_token, true, "Deployment setting must reach the server RPC");
       if (upload.confirmed_at) return json(res, upload);
       const rows = bills.filter(b => b.upload_id === upload.id);
@@ -152,10 +157,10 @@ try {
   await page.goto(base); await click("Upload bills (1)");
   await page.getByLabel("Customer WhatsApp number").fill("bad");
   await click("Submit & open WhatsApp");
-  await page.getByText("Token number is required for every bill at this branch", { exact: true }).waitFor();
+  await page.getByText("Token number is required for every bill at this branch", { exact: true }).last().waitFor();
   await page.getByLabel("Token number (required)").fill("0012");
   await click("Submit & open WhatsApp");
-  await page.getByText("Enter a valid customer WhatsApp number with country code", { exact: true }).waitFor();
+  await page.getByText("Enter a valid customer WhatsApp number with country code", { exact: true }).last().waitFor();
   assert.equal(confirms, 0);
   await page.getByLabel("Customer WhatsApp number").fill("9876543210");
   await click("Submit & open WhatsApp");
@@ -359,7 +364,115 @@ try {
   assert.notEqual(new URL(renewedTab.url()).searchParams.get("text"), groupMessage);
   await renewedTab.close();
   await page.screenshot({ path: "/tmp/billdesk-whatsapp-icon.png", fullPage: true });
+  // Explicit batch selections reject the whole request before making any links.
+  const beforeDenied = mappings.size;
+  for (const ids of [[alpha.id, bravo.id], [alpha.id, hiddenDraft.id], [alpha.id, hiddenOwner.id], [alpha.id, randomUUID()]]) {
+    assert.equal((await post(sharing, { customerPhone: "9876543210", billIds: ids })).status, 409);
+  }
+  for (const ids of [[], [alpha.id, alpha.id], [sibling.id], [alpha.id, "invalid"]]) {
+    assert.equal((await post(sharing, { customerPhone: "9876543210", billIds: ids })).status, 400);
+  }
+  assert.equal(mappings.size, beforeDenied);
+  // Remove the deliberately hidden draft fixture before exercising a fresh upload batch.
+  bills.splice(bills.indexOf(hiddenDraft), 1); uploads.splice(uploads.indexOf(hiddenDraft.uploads), 1);
+  const batch = [draft("BATCH-1", 1, 1), draft("BATCH-2", 2, 2), draft("BATCH-3", 3, 3)];
+  batch.forEach((b, index) => Object.assign(b, { customer_id: alpha.customer_id, customer_reference: alpha.customer_reference, customer_name: alpha.customer_name, token_number: index === 2 ? null : "B-" + index }));
+  Object.assign(batch[1], { amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "warranty_note", billType: "Warranty" } } });
+  Object.assign(batch[2], { amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "amc_note", billType: "AMC" } } });
+  await page.reload(); await click("Upload bills (3)");
+  await page.evaluate(() => { window.open = () => null; });
+  const review = page.locator('.sd-customer-review');
+  assert.equal(await review.locator('.sd-customer-group').count(), 1);
+  assert.equal(await review.getByLabel('Customer WhatsApp number').count(), 1);
+  assert.equal(await review.locator('.sd-review-card').count(), 3);
+  await review.getByLabel('Customer WhatsApp number').fill('9876543214');
+  await review.getByText('Preview preset message', {exact:true}).click();
+  let batchPreview = await review.locator('.sd-message-preview').innerText();
+  for (const bill of batch) assert.ok(batchPreview.includes(bill.invoice_reference));
+  assert.doesNotMatch(batchPreview, /INV-ALPHA/);
+  const beforeBatch = confirms, beforeBatchPrep = preparations;
+  await click('Submit & open WhatsApp');
+  await page.getByText('Token number is required for every bill at this branch', {exact:true}).last().waitFor();
+  assert.equal(confirms, beforeBatch, 'Preflight must not submit a partial batch');
+  await review.getByLabel('Token number (required)').nth(2).fill('B-2');
+  failConfirm = batch[2].upload_id;
+  await review.getByRole('button', {name:'View bill',exact:true}).first().click();
+  const batchDetails = page.getByRole('dialog', {name:'Bill INV-BATCH-1',exact:true});
+  assert.equal(await batchDetails.getByLabel('Customer WhatsApp number').inputValue(), '9876543214');
+  await batchDetails.getByRole('button', {name:'Submit & open WhatsApp',exact:true}).click();
+  await page.getByText('Synthetic submission failure', {exact:true}).waitFor();
+  await page.getByText('Finish submitting or remove this customer’s remaining PDFs before sharing.', {exact:true}).waitFor();
+  assert.equal(confirms, beforeBatch + 2); assert.equal(preparations, beforeBatchPrep);
+  assert.equal(await page.getByRole('button', {name:'Open WhatsApp',exact:true}).isDisabled(), true);
+  assert.ok(batch.slice(0,2).every(b => b.customer_phone === '+919876543214'));
+  assert.equal(await review.getByLabel('Customer WhatsApp number').inputValue(), '9876543214');
+  await click('Retry submission');
+  await page.getByText('Synthetic submission failure', {exact:true}).waitFor();
+  assert.equal(confirms, beforeBatch + 2);
+  await page.reload(); await click('Upload bills (1)');
+  await page.evaluate(() => { window.open = () => null; });
+  assert.equal(await review.getByLabel('Customer WhatsApp number').inputValue(), '+919876543214');
+  assert.equal(await page.getByRole('button', {name:'Open WhatsApp',exact:true}).isDisabled(), true);
+  await review.getByLabel('Token number (required)').fill('B-2');
+  failConfirm = null;
+  await click('Submit & open WhatsApp');
+  const batchLink = page.getByRole('link', {name:'Open WhatsApp',exact:true});
+  await batchLink.waitFor();
+  assert.equal(confirms, beforeBatch + 3); assert.equal(preparations, beforeBatchPrep + 3);
+  const batchMessage = new URL(await batchLink.getAttribute('href')).searchParams.get('text');
+  assert.equal(batchMessage.split('\n').filter(line => line.startsWith('http')).length, 3);
+  for (const bill of batch) assert.ok(batchMessage.includes(bill.invoice_reference));
+  assert.doesNotMatch(batchMessage, /INV-ALPHA|INV-BRAVO|INV-CHARLIE/);
+  assert.ok(batch.every(b => b.customer_phone === '+919876543214'));
+  for (const width of [320,390,1440]) {
+    await page.setViewportSize({width,height:1000});
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  }
+  // A combined PDF can contain two customers, each with their own contact and message.
+  const mixedA = draft('MIXED-A', 1, 2), mixedB = draft('MIXED-B', 3, 3);
+  const unusedUpload = mixedB.uploads;
+  mixedB.uploads = mixedA.uploads; mixedB.upload_id = mixedA.upload_id;
+  uploads.splice(uploads.indexOf(unusedUpload), 1);
+  const mixedExtra = draft('MIXED-A-EXTRA', 1, 1);
+  Object.assign(mixedExtra, {customer_id:mixedA.customer_id,customer_reference:mixedA.customer_reference,customer_name:mixedA.customer_name});
+  mixedA.customer_phone = '+919876543215'; mixedExtra.customer_phone = '+919876543216';
+  [mixedA,mixedB,mixedExtra].forEach(b => { b.token_number = 'M'; });
+  await page.reload(); await click('Upload bills (2)');
+  const mixedGroupA = page.getByRole('region', {name:'Review MIXED-A',exact:true});
+  const mixedGroupB = page.getByRole('region', {name:'Review MIXED-B',exact:true});
+  assert.equal(await review.getByLabel('Customer WhatsApp number').count(), 2);
+  assert.equal(await mixedGroupA.getByLabel('Customer WhatsApp number').inputValue(), '');
+  await mixedGroupA.getByText('Saved numbers differ. Enter the correct number for this customer.', {exact:true}).waitFor();
+  await mixedGroupA.getByLabel('Customer WhatsApp number').fill('9876543215');
+  await mixedGroupB.getByLabel('Customer WhatsApp number').fill('9876543216');
+  const handoffsBefore = handoffs.length;
+  await click('Submit all');
+  await page.getByText('0 ready · 0 failed · 0 / 10 PDFs', {exact:true}).waitFor();
+  assert.equal(handoffs.length, handoffsBefore, 'Multiple customers use separate explicit handoffs');
+  assert.equal(await page.getByRole('button', {name:'Open WhatsApp',exact:true}).count(), 2);
+  await page.evaluate(() => { window.open = () => null; });
+  await page.getByRole('button', {name:'Open WhatsApp',exact:true}).first().click();
+  await batchLink.waitFor();
+  const mixedMessageA = new URL(await batchLink.getAttribute('href')).searchParams.get('text');
+  assert.match(mixedMessageA, /INV-MIXED-A-EXTRA/); assert.doesNotMatch(mixedMessageA, /INV-MIXED-B|INV-BATCH/);
+  await page.getByRole('button', {name:'Open WhatsApp',exact:true}).click();
+  await page.waitForFunction(() => document.querySelectorAll('.sd-sharing-queue a[aria-label="Open WhatsApp"]').length === 2);
+  const mixedLinks = await batchLink.all();
+  const mixedMessageB = new URL(await mixedLinks[1].getAttribute('href')).searchParams.get('text');
+  assert.match(mixedMessageB, /INV-MIXED-B/); assert.doesNotMatch(mixedMessageB, /INV-MIXED-A/);
+  await click('Close upload dialog');
+  const later = draft('MIXED-A-NEXT', 1, 1);
+  Object.assign(later, {customer_id:mixedA.customer_id,customer_reference:mixedA.customer_reference,customer_name:mixedA.customer_name,token_number:'NEXT'});
+  await click('Refresh'); await click('Upload bills (1)');
+  assert.equal(await review.getByLabel('Customer WhatsApp number').inputValue(), '+919876543215');
+  await click('Submit & open WhatsApp');
+  await page.waitForFunction(() => document.querySelectorAll('.sd-sharing-queue a[aria-label="Open WhatsApp"]').length === 3);
+  const nextMessage = new URL(await batchLink.last().getAttribute('href')).searchParams.get('text');
+  assert.match(nextMessage, /INV-MIXED-A-NEXT/);
+  assert.doesNotMatch(nextMessage, /INV-MIXED-A-EXTRA|INV-MIXED-B/);
+  assert.equal(nextMessage.split('\n').filter(line => line.startsWith('http')).length, 1);
+  await page.screenshot({path:'/tmp/billdesk-customer-batches.png',fullPage:true});
   assert.deepEqual(errors, []);
-  console.log("WhatsApp passed: short hashed links, anonymous GET/HEAD, streaming >4.5 MB, no storage leaks, safe failures, customer-group headings and links, matching preview, private page ranges, draft/owner/customer isolation, all-links-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
+  console.log("WhatsApp passed: grouped batch contacts, explicit bill selection, partial retries/reload recovery, mixed customers, later-batch isolation, short hashed links, anonymous GET/HEAD, streaming >4.5 MB, no storage leaks, safe failures, customer-group headings and links, matching preview, private page ranges, draft/owner/customer isolation, all-links-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
 } catch (error) { console.error(appLogs); await page.screenshot({ path: "/tmp/billdesk-whatsapp-failure.png", fullPage: true }).catch(() => {}); throw error; }
 finally { await browser.close(); app.kill("SIGTERM"); await new Promise(resolve => server.close(resolve)); }

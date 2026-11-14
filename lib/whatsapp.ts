@@ -1,7 +1,25 @@
-import { billType, type DeskBill } from "./desk";
+import { billType, customerKey, type DeskBill } from "./desk";
 
 export const customerLinkSeconds = 7 * 24 * 60 * 60;
 export type BillContact = { phone: string | null; skipWhatsApp: boolean };
+
+export const customerContactKey = (bill: DeskBill) => `${bill.uploaded_by}:${bill.customer_id || customerKey(bill)}`;
+
+export function savedCustomerPhone(bill: DeskBill, candidates: DeskBill[]) {
+  const numbers = new Set<string>();
+  for (const candidate of candidates) {
+    if (customerContactKey(candidate) !== customerContactKey(bill) || !candidate.customer_phone) continue;
+    try { numbers.add(customerPhone(candidate.customer_phone)); } catch { /* Invalid saved values require fresh entry. */ }
+  }
+  return numbers.size > 1 ? "" : [...numbers][0] ?? "+91 ";
+}
+
+export function shareBillIds(value: unknown, selectedId: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.length || value.some(id => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))
+    || new Set(value).size !== value.length || !value.includes(selectedId)) throw new Error("Select the bills to include in this message");
+  return value;
+}
 
 export function customerPhone(value: unknown): string {
   if (typeof value !== "string" || value.length > 40 || !/^\+?[\d\s().-]+$/.test(value.trim())) {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { AuthenticationError, requireRole } from "@/lib/supabase-server";
-import { customerPhone, customerLinkSeconds, customerShareBills, whatsappMessage, whatsappUrl } from "@/lib/whatsapp";
+import { customerPhone, customerLinkSeconds, customerShareBills, shareBillIds, whatsappMessage, whatsappUrl } from "@/lib/whatsapp";
 import { customerPdf } from "@/lib/pdf/customer-copy";
 import { customerBillOrigin, newCustomerBillLink } from "@/lib/customer-bill-links";
 import type { DeskBill } from "@/lib/desk";
@@ -16,16 +16,25 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { user, profile, service } = await requireRole(request, "service_advisor");
     const { id } = await context.params;
     if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "Bill not accessible" }, 404);
-    let phone: string;
-    try { phone = customerPhone((await request.json())?.customerPhone); }
-    catch { return json({ error: "Enter a valid customer WhatsApp number with country code" }, 400); }
+    let phone: string, billIds: string[] | undefined;
+    try {
+      const body = await request.json();
+      phone = customerPhone(body?.customerPhone);
+      billIds = shareBillIds(body?.billIds, id);
+    } catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid WhatsApp request" }, 400); }
     const { data: bill, error } = await service.from("bills")
       .select("*,uploads!inner(storage_path,confirmed_at,file_hash)").eq("id", id).eq("uploaded_by", user.id).maybeSingle();
     if (error) throw new Error("Could not load the bill. Please retry.");
     if (!bill) return json({ error: "Bill not accessible" }, 404);
     if (!bill.uploads.confirmed_at) return json({ error: "Submit this bill to the cashier before sharing" }, 409);
     let related: ShareBill[] = [bill];
-    if (bill.customer_id) {
+    if (billIds) {
+      const { data, error } = await service.from("bills")
+        .select("*,uploads!inner(storage_path,confirmed_at,file_hash)")
+        .in("id", billIds).eq("uploaded_by", user.id).returns<ShareBill[]>();
+      if (error || !data) throw new Error("Could not load the selected bills. Please retry.");
+      related = data;
+    } else if (bill.customer_id) {
       const { data, error } = await service.from("bills")
         .select("*,uploads!inner(storage_path,confirmed_at,file_hash)")
         .eq("customer_id", bill.customer_id).eq("uploaded_by", user.id).not("uploads.confirmed_at", "is", null).returns<ShareBill[]>();
@@ -33,6 +42,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       related = data;
     }
     const bills = customerShareBills(bill, related) as ShareBill[];
+    if (billIds && (related.length !== billIds.length || bills.length !== billIds.length || bills.some(current => !billIds.includes(current.id)))) {
+      return json({ error: "Every selected bill must be submitted and belong to this customer and your account" }, 409);
+    }
     const origin = customerBillOrigin();
     const bucket = service.storage.from("bills");
     const sources = new Map<string, Uint8Array>();

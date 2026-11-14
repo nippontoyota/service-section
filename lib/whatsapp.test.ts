@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import { PDFParse } from "pdf-parse";
-import { billContacts, customerPhone, customerLinkSeconds, customerShareBills, whatsappMessage, whatsappUrl } from "./whatsapp";
+import { billContacts, customerContactKey, customerPhone, customerLinkSeconds, customerShareBills, savedCustomerPhone, shareBillIds, whatsappMessage, whatsappUrl } from "./whatsapp";
 import { customerPdf } from "./pdf/customer-copy";
 import { fixtureSnapshot } from "./test-fixtures";
 import { customerBillCode, customerBillOrigin, hashBillCode, newCustomerBillLink } from "./customer-bill-links";
@@ -92,6 +92,26 @@ test("sharing includes only submitted bills of the same customer and advisor, on
   ];
   assert.deepEqual(customerShareBills(first, candidates).map(b => b.id), [first.id, second.id]);
   assert.deepEqual(customerShareBills({ ...first, customer_id: undefined }, candidates).map(b => b.id), [first.id], "Missing customer IDs must not match by name or phone");
+});
+
+test("customer contact entry spans uploads, normalizes saved numbers, and requires resolving conflicts", () => {
+  const first = { ...fixtureSnapshot().bills[0], customer_id: "one", customer_phone: "9876543210" };
+  const second = { ...first, id: "second", upload_id: "second-pdf", customer_phone: "+91 98765 43210" };
+  assert.equal(customerContactKey(first), customerContactKey(second));
+  assert.equal(savedCustomerPhone(first, [first, second]), "+919876543210");
+  assert.equal(savedCustomerPhone(first, [first, { ...second, customer_phone: "9876543211" }]), "");
+  assert.equal(savedCustomerPhone(first, [{ ...second, uploaded_by: "other" }]), "+91 ");
+  const unknown = { ...first, customer_id: undefined, customer_reference: null, customer_name: "", vehicle_no_display: "", vin: "" };
+  assert.notEqual(customerContactKey(unknown), customerContactKey({ ...unknown, id: "another" }));
+});
+
+test("explicit message selections require unique bill IDs and their anchor", () => {
+  const first = "00000000-0000-4000-8000-000000000001", second = "00000000-0000-4000-8000-000000000002";
+  assert.equal(shareBillIds(undefined, first), undefined);
+  assert.deepEqual(shareBillIds([first, second], first), [first, second]);
+  for (const selection of [null, [], {}, first, [second], [first, first], [first, 123], [first, "invalid"]]) {
+    assert.throws(() => shareBillIds(selection, first), /Select the bills/);
+  }
 });
 
 test("customer PDF includes only the bill pages, including continuation pages", async () => {
