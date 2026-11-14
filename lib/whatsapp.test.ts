@@ -5,6 +5,38 @@ import { PDFParse } from "pdf-parse";
 import { billContacts, customerPhone, customerLinkSeconds, customerShareBills, whatsappMessage, whatsappUrl } from "./whatsapp";
 import { customerPdf } from "./pdf/customer-copy";
 import { fixtureSnapshot } from "./test-fixtures";
+import { customerBillCode, customerBillOrigin, hashBillCode, newCustomerBillLink } from "./customer-bill-links";
+
+test("short bill codes are fresh 128-bit secrets; only their SHA-256 hashes are stored", () => {
+  const links = Array.from({ length: 100 }, () => newCustomerBillLink("https://billdesk-rho.vercel.app"));
+  assert.equal(new Set(links.map(item => item.link)).size, 100);
+  for (const { link, codeHash } of links) {
+    const code = new URL(link).pathname.slice(3);
+    assert.match(code, customerBillCode);
+    assert.equal(code.length, 22);
+    assert.equal(Buffer.from(code, "base64url").length, 16);
+    assert.match(codeHash, /^[a-f0-9]{64}$/);
+    assert.equal(codeHash, hashBillCode(code));
+  }
+  for (const code of ["", "a".repeat(21), "a".repeat(23), "a".repeat(22), "../private.pdf"]) assert(!customerBillCode.test(code));
+});
+
+test("customer link origin must be explicitly configured and cannot use request input", () => {
+  const previous = process.env.BILLDESK_PUBLIC_URL;
+  try {
+    for (const origin of ["https://billdesk-rho.vercel.app", "http://127.0.0.1:3119", "http://localhost:3000"]) {
+      process.env.BILLDESK_PUBLIC_URL = origin + "/";
+      assert.equal(customerBillOrigin(), origin);
+    }
+    for (const origin of ["", "http://public.example", "https://user:password@example.test", "https://example.test/path", "https://example.test/?x=1", "https://example.test/#fragment"]) {
+      process.env.BILLDESK_PUBLIC_URL = origin;
+      assert.throws(customerBillOrigin, /not configured/);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.BILLDESK_PUBLIC_URL;
+    else process.env.BILLDESK_PUBLIC_URL = previous;
+  }
+});
 
 test("normalizes Indian and international numbers without guessing invalid inputs", () => {
   for (const phone of ["9876543210", "+91 98765 43210", "91-9876543210", " +91 (98765) 43210 "]) {

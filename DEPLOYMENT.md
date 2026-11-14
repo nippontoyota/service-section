@@ -23,6 +23,7 @@ Add these in Vercel **Project Settings → Environment Variables** for **Product
 | `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL, `https://<project-ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | The server-side Supabase service-role key |
 | `SERVICE_DESK_DEMO` | `false` |
+| `BILLDESK_PUBLIC_URL` | `https://billdesk-rho.vercel.app` (server-only customer-link origin) |
 
 Use the values from your local `.env.local` or Supabase project settings. Keep the service-role key in Vercel's environment settings, never in source code or a `NEXT_PUBLIC_` variable. No anonymous key, database connection string, or Supabase Auth callback is required for this application's staff login.
 
@@ -112,8 +113,18 @@ Apply `supabase/migrations/202611110001_whatsapp_sharing.sql` immediately before
 
 Set `BILLDESK_REQUIRE_TOKEN=true` for branches that require a token on every new submission, or leave it unset/false to keep tokens optional. This server-only setting is passed to the UI and enforced by the confirmation endpoint and RPC; browser input cannot override it. Each deployment represents one branch.
 
-Customer copies use the existing private `bills` bucket under `customer-copies/v1/`, with seven-day signed access and no public bucket or WhatsApp API credentials. Copies contain only the recorded bill pages. Keep the originals and customer copies private. Existing short-lived staff preview links are unchanged. Previously issued customer links remain usable until expiry even if the recipient number is corrected.
+Customer copies use the existing private `bills` bucket under `customer-copies/v1/`, with seven-day BillDesk links and no public bucket or WhatsApp API credentials. Copies contain only the recorded bill pages. Keep the originals and customer copies private. Existing short-lived staff preview links are unchanged. Previously issued customer links remain usable until expiry even if the recipient number is corrected.
 
-Grouped customer sharing requires no additional migration once the WhatsApp migration above is applied. One message includes every submitted bill with the same customer ID owned by the advisor, including earlier submissions, with separate headings and private links. Drafts and other advisors’ bills are excluded. The existing preparation RPC records the reviewed phone and audit event for each included bill after all links are prepared. Include a two-bill customer in the pilot and check both links and their page boundaries.
+Customer grouping uses the WhatsApp migration above; short links also require the migration described below. One message includes every submitted bill with the same customer ID owned by the advisor, including earlier submissions, with separate headings and private links. Drafts and other advisors’ bills are excluded. The existing preparation RPC records the reviewed phone and audit event for each included bill after all links are prepared. Include a two-bill customer in the pilot and check both links and their page boundaries.
 
 Run `npm test`, `npm run lint`, `npm run build`, the database check, and the isolated WhatsApp browser check documented in README.md. Pilot one bill and one combined PDF with controlled customer numbers on a phone and WhatsApp Web. Check recipient, preset text, page boundaries, download, token display, and cashier visibility. No automated test sends WhatsApp messages.
+
+## Short customer bill links
+
+Apply the additive `supabase/migrations/202611140001_customer_bill_links.sql` before deploying the short-link route. It creates `customer_bill_links` with row-level security and no anonymous/authenticated grants; only the service role can read or write mappings. No raw codes are stored. Existing bills and signed links are unchanged.
+
+Set server-only `BILLDESK_PUBLIC_URL=https://billdesk-rho.vercel.app` in Production, then deploy. Preview/test deployments must use their own explicit origin (the isolated browser test sets `http://127.0.0.1:3119`). A missing/invalid origin fails preparation with a retry message. Never derive this origin from the request host.
+
+`GET` and `HEAD /b/[code]` validate the code and expiry before storage access. Responses use a generic inline PDF filename, private/no-store caching, no-index and no-referrer headers. The PDF body is streamed without redirects or storage headers, following [Vercel streaming guidance](https://vercel.com/kb/guide/how-to-bypass-vercel-body-size-limit-serverless-functions). HEAD/preview requests do not consume a link. Invalid links return 404, expired links 410, and database/storage outages 503 without internal details. An upstream interruption after streaming starts ends the download; the customer can retry the same link.
+
+Run the unit, database, build, deployment-bundle and isolated WhatsApp browser checks before pushing. The browser check includes an actual synthetic PDF over 4.5 MB, checks that bytes arrive before the storage response finishes, and verifies two isolated bill copies with matching headings. After deployment, use synthetic PDFs to verify anonymous GET/HEAD and repeat downloads at the production domain, byte-for-byte delivery above 4.5 MB, expiry and no storage redirects/headers. Do not send pilot WhatsApp messages without a controlled recipient.

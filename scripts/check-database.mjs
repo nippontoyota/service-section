@@ -428,5 +428,30 @@ for (const role of ["anon", "authenticated"]) {
 await db.exec("reset role");
 assert.equal((await db.query("select to_regprocedure('app_confirm_upload(uuid,uuid,jsonb)') as old")).rows[0].old, null);
 console.log("WhatsApp migration passed: explicit choices, required tokens, atomic rollback, owner scope, cashier visibility before sharing, retries, phone correction and audit history.");
+await db.exec(readFileSync("supabase/migrations/202611140001_customer_bill_links.sql", "utf8"));
+const privatePath = `customer-copies/v1/${waDraft}/${"8".repeat(64)}/${waBill}-1-1.pdf`;
+const mapping = (hash = "a".repeat(64), path = privatePath) => db.query(
+ "insert into customer_bill_links(code_hash,bill_id,storage_path) values($1,$2,$3)", [hash,waBill,path]);
+await db.exec("set role service_role");
+await mapping();
+const storedLink = (await db.query("select * from customer_bill_links")).rows[0];
+assert.equal(new Date(storedLink.expires_at) - new Date(storedLink.created_at), 7 * 86400000);
+assert.equal(storedLink.code_hash, "a".repeat(64));
+await assert.rejects(mapping("raw-code"), /check constraint/);
+await assert.rejects(mapping("b".repeat(64), "test.pdf"), /check constraint/);
+await assert.rejects(mapping("b".repeat(64), "customer-copies/v1/../../test.pdf"), /check constraint/);
+await assert.rejects(db.query("insert into customer_bill_links(code_hash,bill_id,storage_path) values($1,$2,$3),($4,$2,$3)",
+ ["b".repeat(64),waBill,privatePath,"a".repeat(64)]), /duplicate key/);
+assert.equal((await db.query("select count(*) as n from customer_bill_links")).rows[0].n, 1, "Group insertion is atomic");
+for (const role of ["anon", "authenticated"]) {
+ await db.exec("reset role; set role " + role);
+ await assert.rejects(db.query("select * from customer_bill_links"), /permission denied/);
+ await assert.rejects(mapping("b".repeat(64)), /permission denied/);
+ await assert.rejects(db.query("update customer_bill_links set expires_at=now()+interval '1 year'"), /permission denied/);
+ await assert.rejects(db.query("delete from customer_bill_links"), /permission denied/);
+}
+await db.exec("reset role");
+assert.equal((await db.query("select relrowsecurity from pg_class where oid='public.customer_bill_links'::regclass")).rows[0].relrowsecurity, true);
+console.log("Customer bill links passed: server-only access, hash/path constraints, seven-day expiry and atomic group insertion.");
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

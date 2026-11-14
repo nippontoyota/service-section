@@ -2,7 +2,7 @@
 // Exercises real Next routes against an isolated storage/database stub; never sends messages.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { PDFDocument } from "pdf-lib";
 import { PDFParse } from "pdf-parse";
@@ -14,9 +14,10 @@ const session = "a".repeat(43), hash = createHash("sha256").update(session).dige
 const source = await PDFDocument.create();
 for (const text of ["CUSTOMER ALPHA", "ALPHA CONTINUATION", "CUSTOMER BRAVO"]) source.addPage().drawText(text);
 const original = Buffer.from(await source.save());
-const storage = new Map([["test.pdf", original]]), signedLinks = new Map();
+const storage = new Map([["test.pdf", original]]), signedLinks = new Map(), mappings = new Map();
+const codeHash = link => createHash("sha256").update(new URL(link).pathname.slice(3)).digest("hex");
 const bills = [], uploads = [], audit = [];
-let confirms = 0, preparations = 0, failSigning = true, storageUploads = 0, failBill = null;
+let confirms = 0, preparations = 0, failMappings = true, storageUploads = 0, failBill = null, failLookup = false, failStorage = false, redirectStorage = false, storageReads = 0, mappingReads = 0, streamFinished = false;
 function draft(name, from, to) {
   const upload = { id: randomUUID(), original_filename: name + ".pdf", storage_path: "test.pdf", confirmed_at: null, file_hash: createHash("sha256").update(name).digest("hex"), status: "review" };
   const bill = { id: randomUUID(), upload_id: upload.id, uploaded_by: advisorId, customer_name: name, customer_reference: name, customer_id: name, customer_phone: null, token_number: null, invoice_reference: "INV-" + name, vehicle_no_display: "KL01AB1234", vin: "", invoice_date: "2026-11-11", amount_paise: 10000, approval_status: "pending", approved_at: null, approved_by: null, created_at: new Date().toISOString(), page_from: from, page_to: to, amount_evidence: "Total 100", extraction_issues: [], payment_evidence: [], uploads: upload };
@@ -29,6 +30,25 @@ const bytes = async req => { const chunks = []; for await (const chunk of req) c
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, backend), path = decodeURIComponent(url.pathname);
+    if (path === "/rest/v1/customer_bill_links") {
+      assert.equal(req.headers.authorization, "Bearer isolated-test-key");
+      if (req.method === "POST") {
+        const rows = JSON.parse(await bytes(req));
+        if (failMappings || rows.some(row => row.bill_id === failBill)) return json(res, { message: "Synthetic mapping failure" }, 503);
+        for (const row of rows) {
+          assert.deepEqual(Object.keys(row).sort(), ["bill_id", "code_hash", "expires_at", "storage_path"]);
+          assert.match(row.code_hash, /^[a-f0-9]{64}$/);
+          assert(!mappings.has(row.code_hash));
+          assert(storage.has(row.storage_path));
+          assert(Math.abs(Date.parse(row.expires_at) - Date.now() - 7 * 86400000) < 10000);
+        }
+        for (const row of rows) mappings.set(row.code_hash, row);
+        return json(res, null, 201);
+      }
+      mappingReads++;
+      if (failLookup) return json(res, { message: "Sensitive database error" }, 503);
+      return json(res, mappings.get(url.searchParams.get("code_hash")?.slice(3)) || null);
+    }
     if (path === "/rest/v1/staff_sessions") return json(res, url.searchParams.get("token_hash") === "eq." + hash ? { staff_id: profile.id, profiles: profile } : null);
     if (path === "/rest/v1/rpc/app_desk_snapshot") return json(res, snapshot());
     if (path === "/rest/v1/uploads") return json(res, snapshot().drafts);
@@ -68,8 +88,7 @@ const server = createServer(async (req, res) => {
       const key = path.slice(signPrefix.length);
       if (req.method === "POST") {
         const body = JSON.parse(await bytes(req));
-        if ((failSigning && key.startsWith("customer-copies/")) || (failBill && key.includes(failBill))) return json(res, { statusCode: "503", message: "Synthetic signing outage" }, 503);
-        if (key.startsWith("customer-copies/")) assert.equal(body.expiresIn, 604800);
+        assert(!key.startsWith("customer-copies/"), "Customer URLs must never be signed");
         const token = randomUUID(); signedLinks.set(token, { key, expiresAt: Date.now() + body.expiresIn * 1000 });
         return json(res, { signedURL: "/object/sign/bills/" + key + "?token=" + token });
       }
@@ -82,14 +101,26 @@ const server = createServer(async (req, res) => {
       if (req.headers.authorization !== "Bearer isolated-test-key") return json(res, { error: "Private storage" }, 403);
       const key = path.slice(objectPrefix.length);
       if (req.method === "POST") { assert(!storage.has(key)); storage.set(key, await bytes(req)); storageUploads++; return json(res, { Key: "bills/" + key }); }
+      storageReads++;
+      if (failStorage) return json(res, { message: "Private storage failure: " + key }, 503);
+      if (redirectStorage) { res.writeHead(302, { Location: backend + "/private-target" }); return res.end(); }
       if (!storage.has(key)) return json(res, { statusCode: "404", message: "Not found" }, 404);
-      res.writeHead(200, { "Content-Type": "application/pdf" }); return res.end(req.method === "HEAD" ? undefined : storage.get(key));
+      res.writeHead(200, { "Content-Type": "application/pdf", "X-Storage-Path": key, "Content-Location": backend + path });
+      if (req.method === "HEAD") return res.end();
+      if (storage.get(key).length > 4.5 * 1024 * 1024) {
+        const body = storage.get(key);
+        streamFinished = false;
+        res.write(body.subarray(0, 1024));
+        setTimeout(() => { streamFinished = true; res.end(body.subarray(1024)); }, 1000);
+        return;
+      }
+      return res.end(storage.get(key));
     }
     throw new Error("Unexpected backend request: " + req.method + " " + path);
   } catch (error) { console.error(error); json(res, { message: error.message }, 500); }
 });
 await new Promise(resolve => server.listen(3120, "127.0.0.1", resolve));
-const app = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--port", "3119", "--hostname", "127.0.0.1"], { env: { ...process.env, NEXT_PUBLIC_SUPABASE_URL: backend, SUPABASE_SERVICE_ROLE_KEY: "isolated-test-key", SERVICE_DESK_DEMO: "false", BILLDESK_REQUIRE_TOKEN: "true" }, stdio: ["ignore", "pipe", "pipe"] });
+const app = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--port", "3119", "--hostname", "127.0.0.1"], { env: { ...process.env, NEXT_PUBLIC_SUPABASE_URL: backend, SUPABASE_SERVICE_ROLE_KEY: "isolated-test-key", SERVICE_DESK_DEMO: "false", BILLDESK_REQUIRE_TOKEN: "true", BILLDESK_PUBLIC_URL: base }, stdio: ["ignore", "pipe", "pipe"] });
 let appLogs = ""; app.stdout.on("data", b => { appLogs += b; }); app.stderr.on("data", b => { appLogs += b; });
 const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -137,7 +168,7 @@ try {
   assert.doesNotMatch(await page.locator(".sd-notice").last().innerText(), /Unexpected token|DOCTYPE/);
   assert.equal(confirms, 1); assert.equal(preparations, 0); assert.equal(handoffs.length, 0);
   await page.unroute(missingRoute);
-  failSigning = false;
+  failMappings = false;
   // Block popups to verify the visible handoff link still works.
   await page.evaluate(() => { window.open = () => null; });
   await click("Open WhatsApp");
@@ -152,13 +183,76 @@ try {
   const parser = new PDFParse({ data: new Uint8Array(await download.arrayBuffer()) });
   try { const text = (await parser.getText()).text; assert.match(text, /ALPHA CONTINUATION/); assert.doesNotMatch(text, /BRAVO/); } finally { await parser.destroy(); }
   assert.equal((await fetch(backend + "/storage/v1/object/bills/test.pdf")).status, 403);
-  signedLinks.get(new URL(link).searchParams.get("token")).expiresAt = 0;
-  assert.equal((await fetch(link)).status, 403);
+  assert.match(link, /^http:\/\/127\.0\.0\.1:3119\/b\/[A-Za-z0-9_-]{22}$/);
+  const privateResponse = response => {
+    assert.equal(response.redirected, false);
+    assert.equal(response.headers.get("location"), null);
+    assert.equal(response.headers.get("content-location"), null);
+    assert.equal(response.headers.get("x-storage-path"), null);
+    assert.match(response.headers.get("cache-control"), /private.*no-store/);
+    assert.match(response.headers.get("x-robots-tag"), /noindex/);
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    assert.doesNotMatch(JSON.stringify([...response.headers]), /customer-copies|isolated-test-key|3120|supabase/);
+  };
+  privateResponse(download);
+  assert.equal(download.headers.get("content-disposition"), 'inline; filename="bill.pdf"');
+  for (const method of ["HEAD", "GET", "GET"]) {
+    const response = await fetch(link, { method });
+    assert.equal(response.status, 200); privateResponse(response);
+    assert.equal((await response.arrayBuffer()).byteLength > 0, method !== "HEAD");
+  }
+  // A fresh browser with no staff cookie fetches only BillDesk, including its PDF bytes.
+  const customerContext = await browser.newContext();
+  const customerPage = await customerContext.newPage(), customerRequests = [];
+  customerPage.on("request", req => customerRequests.push(req.url()));
+  await customerPage.goto(base + "/b/invalid");
+  assert.equal(await customerPage.evaluate(async url => (await fetch(url)).status, link), 200);
+  assert(customerRequests.every(url => new URL(url).origin === base));
+  await customerContext.close();
+  const readsBeforeInvalid = storageReads, lookupsBeforeInvalid = mappingReads;
+  assert.equal((await fetch(base + "/b/invalid")).status, 404);
+  assert.equal(mappingReads, lookupsBeforeInvalid);
+  const altered = link.slice(0, -22) + (link.at(-22) === "A" ? "B" : "A") + link.slice(-21);
+  assert.equal((await fetch(altered)).status, 404);
+  mappings.get(codeHash(link)).expires_at = new Date(Date.now() - 1).toISOString();
+  for (const method of ["GET", "HEAD"]) {
+    const expired = await fetch(link, { method });
+    assert.equal(expired.status, 410); privateResponse(expired);
+  }
+  assert.equal(storageReads, readsBeforeInvalid, "Invalid/expired codes never reach storage");
+  mappings.get(codeHash(link)).expires_at = new Date(Date.now() + 7 * 86400000).toISOString();
+  for (const failure of ["database", "storage", "redirect"]) {
+    failLookup = failure === "database"; failStorage = failure === "storage"; redirectStorage = failure === "redirect";
+    for (const method of ["GET", "HEAD"]) {
+      const response = await fetch(link, { method });
+      assert.equal(response.status, 503); privateResponse(response);
+      assert.doesNotMatch(await response.text(), /Sensitive|customer-copies|3120|supabase|isolated-test-key/);
+    }
+  }
+  failLookup = false; failStorage = false; redirectStorage = false;
+  // Valid PDF with an uncompressed synthetic attachment exceeds Vercel's buffered limit.
+  const largePdf = await PDFDocument.create(); largePdf.addPage().drawText("SYNTHETIC LARGE BILL");
+  await largePdf.attach(randomBytes(5 * 1024 * 1024), "synthetic.bin");
+  const largeBytes = Buffer.from(await largePdf.save());
+  assert(largeBytes.length > 4.5 * 1024 * 1024);
+  const mappedPath = mappings.get(codeHash(link)).storage_path, savedPdf = storage.get(mappedPath);
+  storage.set(mappedPath, largeBytes);
+  const largeResponse = await fetch(link); privateResponse(largeResponse);
+  assert.equal(largeResponse.status, 200);
+  const reader = largeResponse.body.getReader(), firstChunk = await reader.read();
+  assert.equal(streamFinished, false, "Customer receives bytes before the upstream finishes");
+  const chunks = [Buffer.from(firstChunk.value)];
+  for (;;) { const next = await reader.read(); if (next.done) break; chunks.push(Buffer.from(next.value)); }
+  assert.deepEqual(Buffer.concat(chunks), largeBytes);
+  storage.set(mappedPath, savedPdf);
   await page.getByLabel("Customer WhatsApp number").fill("+44 7700 900123");
   assert.equal(await fallback.count(), 0, "Correcting the recipient removes the old handoff");
   await click("Open WhatsApp"); await fallback.waitFor();
   assert.equal(new URL(await fallback.getAttribute("href")).pathname, "/447700900123");
   assert.equal(alpha.customer_phone, "+447700900123");
+  const refreshedLink = new URL(await fallback.getAttribute("href")).searchParams.get("text").split("\n").find(line => line.startsWith("http"));
+  assert.notEqual(refreshedLink, link, "Each preparation issues a fresh code");
+  assert.equal((await fetch(link)).status, 200, "Previous links remain usable");
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
@@ -211,15 +305,25 @@ try {
   assert.match(preview, /2 bills/); assert.match(preview, /Body & paint — INV-ALPHA/); assert.match(preview, /Service invoice — INV-ALPHA-SERVICE/);
   assert.doesNotMatch(preview, /ALPHA-DRAFT|ALPHA-OTHER-ADVISOR|INV-BRAVO/);
   const beforeGroup = preparations;
+  const mappingsBeforeGroup = mappings.size;
+  failStorage = true;
+  const storageFailure = await post(sharing, { customerPhone: "9876543210" });
+  assert.equal(storageFailure.status, 503);
+  assert.equal((await storageFailure.json()).whatsappUrl, undefined);
+  assert.equal(mappings.size, mappingsBeforeGroup);
+  assert.equal(preparations, beforeGroup);
+  failStorage = false;
   failBill = sibling.id;
   const failed = await post(sharing, { customerPhone: "9876543210" });
   assert.equal(failed.status, 503); assert.equal((await failed.json()).whatsappUrl, undefined);
   assert.equal(preparations, beforeGroup, "Do not audit or hand off a partial set of links");
+  assert.equal(mappings.size, mappingsBeforeGroup);
   failBill = null;
   const groupPopup = context.waitForEvent("page"); await click("Open WhatsApp");
   const groupTab = await groupPopup; await groupTab.waitForURL("https://wa.me/**");
   const groupMessage = new URL(groupTab.url()).searchParams.get("text");
   const groupLinks = groupMessage.split("\n").filter(line => line.startsWith("http"));
+  assert.doesNotMatch(groupMessage, /customer-copies|supabase|3120/);
   assert.equal(groupLinks.length, 2); assert.notEqual(groupLinks[0], groupLinks[1]);
   assert.match(groupMessage, /\*1\. Body & paint — INV-ALPHA\*\nhttp/);
   assert.match(groupMessage, /\*2\. Service invoice — INV-ALPHA-SERVICE\*\nhttp/);
@@ -236,6 +340,6 @@ try {
   assert.equal(preparations, beforeGroup + 2); assert.equal(confirms, 3);
   assert.equal(await page.locator(".sd-message-preview").innerText(), groupMessage);
   assert.deepEqual(errors, []);
-  console.log("WhatsApp passed: customer-group headings and links, matching preview, private page ranges, draft/owner/customer isolation, all-links-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
+  console.log("WhatsApp passed: short hashed links, anonymous GET/HEAD, streaming >4.5 MB, no storage leaks, safe failures, customer-group headings and links, matching preview, private page ranges, draft/owner/customer isolation, all-links-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
 } catch (error) { console.error(appLogs); await page.screenshot({ path: "/tmp/billdesk-whatsapp-failure.png", fullPage: true }).catch(() => {}); throw error; }
 finally { await browser.close(); app.kill("SIGTERM"); await new Promise(resolve => server.close(resolve)); }
