@@ -16,7 +16,7 @@ try {
   assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: filterRoot }).status, 0);
   copyFileSync(join(root, ".vercelignore"), join(filterRoot, ".gitignore"));
   const apiSources = readdirSync(join(root, "app/api"), { recursive: true }).filter(path => path.endsWith("/route.ts")).map(path => "app/api/" + path);
-  const required = ["app/page.tsx", "app/b/[code]/route.ts", ".env.example", ...apiSources];
+  const required = ["app/page.tsx", "app/b/[code]/route.ts", "app/g/[code]/route.ts", "app/security/page.tsx", "app/security/verify/[code]/page.tsx", ".env.example", ...apiSources];
   const privateFiles = ["bills/customer.json", "bills/customer.pdf", "samples/private/expectations.json", "output/report.csv", ".env.local", "invoice.pdf"];
   const filter = spawnSync("git", ["-c", "core.excludesFile=/dev/null", "check-ignore", "--no-index", "--stdin"], {
     cwd: filterRoot, input: [...required, ...privateFiles].join("\n") + "\n", encoding: "utf8",
@@ -26,10 +26,10 @@ try {
   for (const path of required) assert(!excluded.has(path), `Deployment source excluded by .vercelignore: ${path}`);
   for (const path of privateFiles) assert(excluded.has(path), `Private file allowed by .vercelignore: ${path}`);
 
-  for (const route of ["api/uploads/[id]/process", "api/desk", "api/bills/[id]/whatsapp", "b/[code]"]) {
+  for (const route of ["api/uploads/[id]/process", "api/desk", "api/bills/[id]/whatsapp", "b/[code]", "g/[code]"]) {
     const trace = resolve(root, ".next/server/app", route, "route.js.nft.json");
     const { files } = JSON.parse(readFileSync(trace, "utf8"));
-    if (route !== "b/[code]") {
+    if (route.startsWith("api/")) {
       assert(files.some(file => file.endsWith("/pdf.worker.mjs")), `${route}: missing PDF worker`);
       assert(files.some(file => /canvas.*\.node$/.test(file)), `${route}: missing native canvas`);
     }

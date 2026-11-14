@@ -1,4 +1,4 @@
-export type Role = "cashier" | "service_advisor" | "super_admin";
+export type Role = "cashier" | "service_advisor" | "super_admin" | "security";
 export type Staff = { id: string; staff_id: string; full_name: string; role: Role; active: boolean; must_change_password: boolean };
 export type PaymentEvidence = { amount_paise: number; method: string; date: string; evidence: string };
 export type BillDocument = {

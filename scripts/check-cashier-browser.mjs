@@ -70,8 +70,10 @@ try {
   assert.equal(await page.getByRole("button", { name: /Mark as paid/ }).isDisabled(), true);
   await cheque.fill("001234");
   await page.getByRole("button", { name: /Mark as paid/ }).click();
-  await page.getByText("Bill marked as paid and moved to Archive.", { exact: true }).waitFor();
+  await page.getByText("Bill marked as paid and moved to Archive.", { exact: true }).last().waitFor();
   assert.deepEqual(await invoices.allTextContents(), ["DEMO-2601", "DEMO-2605", "DEMO-2603", "DEMO-2600", "DEMO-2604"]);
+  await page.getByRole("button", { name: "Issue gate pass", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close bill details", exact: true }).click();
   await page.getByRole("button", { name: /^Archive/ }).click();
   await page.getByRole("button", { name: "DEMO-2602", exact: true }).click();
   await page.getByText("Cheque number: 001234", { exact: true }).waitFor();
@@ -83,7 +85,7 @@ try {
   await mode.selectOption("Cash");
   assert.equal(await transaction.count(), 0);
   await page.getByRole("button", { name: /Mark as paid/ }).click();
-  await page.getByText("Bill marked as paid and moved to Archive.", { exact: true }).waitFor();
+  await page.getByText("Bill marked as paid and moved to Archive.", { exact: true }).last().waitFor();
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("service-desk-finance-demo-v1")));
   assert.equal(saved.payments.find(p => p.bill_id === "ui-sample-1").transaction_id, null);
   assert.equal(saved.payments.find(p => p.bill_id === "ui-sample-2").transaction_id, "001234");

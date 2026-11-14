@@ -128,3 +128,37 @@ Set server-only `BILLDESK_PUBLIC_URL=https://billdesk-rho.vercel.app` in Product
 `GET` and `HEAD /b/[code]` validate the code and expiry before storage access. Responses use a generic inline PDF filename, private/no-store caching, no-index and no-referrer headers. The PDF body is streamed without redirects or storage headers, following [Vercel streaming guidance](https://vercel.com/kb/guide/how-to-bypass-vercel-body-size-limit-serverless-functions). HEAD/preview requests do not consume a link. Invalid links return 404, expired links 410, and database/storage outages 503 without internal details. An upstream interruption after streaming starts ends the download; the customer can retry the same link.
 
 Run the unit, database, build, deployment-bundle and isolated WhatsApp browser checks before pushing. The browser check includes an actual synthetic PDF over 4.5 MB, checks that bytes arrive before the storage response finishes, and verifies two isolated bill copies with matching headings. After deployment, use synthetic PDFs to verify anonymous GET/HEAD and repeat downloads at the production domain, byte-for-byte delivery above 4.5 MB, expiry and no storage redirects/headers. Do not send pilot WhatsApp messages without a controlled recipient.
+
+
+## QR gate passes
+
+Apply `supabase/migrations/202611140002_gate_passes.sql` after all earlier migrations and before this application release. It adds the Security role, private pass/coverage tables, transactional issuance and exit confirmation, payment-reversal revocation, and a shared transaction lock for bill, payment and submission writes. It retains all existing records. The global lock is intended for a single service desk; review contention before increasing write throughput substantially.
+
+Set server-only `GATE_PASS_SIGNING_SECRET` to at least 32 random bytes (for example, generate with `openssl rand -hex 32`) and retain it across deployments. Do not use a `NEXT_PUBLIC_` name. Set `BILLDESK_PUBLIC_URL` to the exact HTTPS production origin. The HMAC secret reproduces existing codes for resends; changing it requires revoking all unused passes and reissuing them after payment checks. Do not rotate it silently while active passes exist.
+
+Deploy, then use **Staff accounts → Create account → Security** to create named guard accounts. The Security role must not be created before the new server code is deployed: older server versions do not know this role. Never roll back to an older server while Security accounts are active; disable them and revoke their sessions first. Migration rollback is unnecessary for an application rollback and would remove audit records.
+
+Verification commands:
+
+```sh
+npm test
+npm run lint
+npm run build
+npm run check:deployment
+# Build against the isolated backend before browser integration checks:
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120 npm run build
+# Install PGlite/Playwright in a separate test tools directory, or provide their absolute package paths.
+PGLITE_PATH=/path/to/node_modules/@electric-sql/pglite npm run test:database
+PLAYWRIGHT_PATH=/path/to/node_modules/playwright node scripts/check-gate-passes-browser.mjs
+PLAYWRIGHT_PATH=/path/to/node_modules/playwright node scripts/check-whatsapp-browser.mjs
+```
+
+The gate-pass browser check starts an isolated backend and Next server on ports 3120/3131, uses synthetic customer data, decodes the generated QR, denies camera access, and exercises HTTP role restrictions and the WhatsApp fallback without opening WhatsApp. The database suite uses PGlite to verify migration behavior and permissions. `scripts/check-gate-pass-concurrency.mjs` tests independent PostgreSQL connections: simultaneous issuance and confirmation, reversal/submission locks, and reissuance while an exit commits. Set `PG_TEST_URL` to a disposable **local** PostgreSQL maintenance database and optionally `PG_TEST_DRIVER` to the installed `pg` package path. It creates and drops a uniquely named synthetic database; the maintenance user needs database-creation privileges. For example:
+
+```sh
+PG_TEST_URL=postgresql://test_user@127.0.0.1:55439/postgres PG_TEST_DRIVER=/path/to/node_modules/pg node scripts/check-gate-pass-concurrency.mjs
+```
+
+Pilot using synthetic bills and two phones on HTTPS: collect all bills across two advisors for the same vehicle; issue and send to a controlled test recipient; open the QR on the customer phone; scan on the guard phone; compare the registration and confirm once. Re-scan, reverse a payment, add another unpaid bill, and test camera denial and disconnected verification. No unavailable/expired/revoked/used pass may approve departure. The public page and link previews are read-only; a valid scan never confirms an exit by itself.
+
+Do not run the historical production-reset script against an installation with gate-pass audit history. Covered bills are deliberately protected from deletion by foreign keys.

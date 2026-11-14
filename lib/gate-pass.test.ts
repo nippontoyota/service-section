@@ -1,0 +1,23 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import QRCode from "qrcode";
+import { gateCodeFromLink, gateMessage, gateCodePattern } from "./gate-pass";
+import { newGatePass, codeForGatePass } from "./gate-pass-server";
+test("unguessable reproducible pass codes store only a hash and reject altered links", async () => {
+ process.env.GATE_PASS_SIGNING_SECRET = "test-only-secret-".repeat(3);
+ const pass = newGatePass();
+ assert.match(pass.code, gateCodePattern);
+ assert.equal(codeForGatePass(pass.id), pass.code);
+ assert.notEqual(newGatePass().code, pass.code);
+ assert.equal(pass.hash, createHash("sha256").update(pass.code).digest("hex"));
+ const origin = "https://billdesk.example", link = `${origin}/g/${pass.code}`;
+ assert.equal(gateCodeFromLink(link, origin), pass.code);
+ for (const value of [pass.code, link + "/", link + "?foo=1", link + "#x", link.replace("https:", "http:"), link.replace("billdesk.example", "evil.example"), link.replace("/g/", "/b/"), link.replace("https://", "https://staff:pass@")]) assert.equal(gateCodeFromLink(value, origin), null);
+ const image = await QRCode.toDataURL(link, { width: 360, margin: 4 });
+ assert.ok(image.startsWith("data:image/png;base64,"));
+ const message = gateMessage({ status: "Valid", customerName: "Customer", vehicle: "KL01AB1234", expiresAt: "2026-11-15T00:00:00Z" }, link);
+ assert.ok(message.includes(link)); assert.ok(message.includes("one exit")); assert.ok(message.includes("KL01AB1234"));
+ process.env.GATE_PASS_SIGNING_SECRET = "short";
+ assert.throws(() => newGatePass(), /not configured/);
+});

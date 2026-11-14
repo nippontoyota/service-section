@@ -453,5 +453,6 @@ for (const role of ["anon", "authenticated"]) {
 await db.exec("reset role");
 assert.equal((await db.query("select relrowsecurity from pg_class where oid='public.customer_bill_links'::regclass")).rows[0].relrowsecurity, true);
 console.log("Customer bill links passed: server-only access, hash/path constraints, seven-day expiry and atomic group insertion.");
+await (await import("./check-gate-passes-db.mjs")).checkGatePasses(db);
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

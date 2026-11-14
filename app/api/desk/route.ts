@@ -17,6 +17,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const authStart = performance.now();
     const { service, profile, user } = await requireStaff(request, body.action === "password");
+    if (profile.role === "security" && body.action !== "password") return json({ error: "Security workspace only" }, 403);
     if (body.action === "password") {
       if (typeof body.password !== "string" || body.password.length < 12 || body.password.length > 128) throw new Error("Use a password between 12 and 128 characters");
       const passwordHash = await hashPassword(body.password);
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
       } else {
         const temporaryPassword = body.action === "reset_staff" ? randomBytes(18).toString("base64url") + "!a9" : undefined;
         if (body.action === "create_staff") {
-          if (!/^[a-z0-9_]{3,40}$/.test(body.staffId ?? "") || !["cashier","service_advisor","super_admin"].includes(body.role) || typeof body.fullName !== "string" || !body.fullName.trim() || body.fullName.length > 100) throw new Error("Valid user ID, name and role required");
+          if (!/^[a-z0-9_]{3,40}$/.test(body.staffId ?? "") || !["cashier","service_advisor","super_admin","security"].includes(body.role) || typeof body.fullName !== "string" || !body.fullName.trim() || body.fullName.length > 100) throw new Error("Valid user ID, name and role required");
         }
         const passwordHash = await hashPassword(temporaryPassword ?? body.password, body.action === "create_staff" ? 8 : 128);
         const { error } = await service.rpc("app_staff_account", {

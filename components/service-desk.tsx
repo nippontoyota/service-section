@@ -14,7 +14,7 @@ import { billContacts, customerPhone, customerShareBills, whatsappMessage } from
 import { readApiResponse } from "@/lib/api-response";
 import "./service-desk.css";
 
-const labels = { cashier: "Cashier", service_advisor: "Service advisor", super_admin: "Super admin" };
+const labels = { cashier: "Cashier", service_advisor: "Service advisor", super_admin: "Super admin", security: "Security" };
 const metricNames = { paid: "Total paid bills", unpaid: "Total unpaid bills", pending: "Awaiting approval" };
 const dateTime = (date: string) => new Date(date).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const empty: Snapshot = { bills: [], payments: [], staff: [], audit: [], as_of: "" };
@@ -51,6 +51,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   const [phones, setPhones] = useState<Record<string, string>>({});
   const [skips, setSkips] = useState<Record<string, boolean>>({});
   const [sharingBills, setSharingBills] = useState<DeskBill[]>([]);
+  const [gateLinks, setGateLinks] = useState<Record<string, string>>({});
   const [prepared, setPrepared] = useState<Record<string, { url: string; expiresAt: string; phone: string; message: string; billIds: string[] }>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
@@ -79,7 +80,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     setData(snapshot); setProfile(user); setRestoring(false); setRefreshError("");
     if (user?.id !== profileId.current) {
       clearPreviews(); setFiles([]); setSelectedId(null); setUploadOpen(false);
-      setPhones({}); setSkips({}); setPrepared({}); setSharingBills([]); setTokens({});
+      setPhones({}); setSkips({}); setPrepared({}); setGateLinks({}); setSharingBills([]); setTokens({});
       setTab(user?.role === "cashier" ? "overview" : demo ? "bills" : "overview");
       profileId.current = user?.id;
     }
@@ -128,6 +129,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     if (initialFetch.current) { initialFetch.current = false; listener(); }
     return () => { window.removeEventListener("storage", listener); window.clearInterval(timer); };
   }, [refresh]);
+  useEffect(() => { if (!demo && profile?.role === "security" && !profile.must_change_password) window.location.replace("/security"); }, [profile, demo]);
   useEffect(() => () => clearPreviews(), [clearPreviews]);
   useEffect(() => {
     if (!files.length) return;
@@ -180,7 +182,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     }
     refreshVersion.current++;
     sessionStorage.removeItem("desk-demo-user"); setProfile(null); setData(empty); setSelectedId(null); clearPreviews(); profileId.current = undefined; setFiles([]); setTokens({}); setUploadOpen(false); setShowPassword(false); setNotice(""); setStaffPassword("");
-    setPhones({}); setSkips({}); setPrepared({}); setSharingBills([]);
+    setPhones({}); setSkips({}); setPrepared({}); setGateLinks({}); setSharingBills([]);
   }
   async function action(body: ActionBody) {
     if (!profile) return;
@@ -228,9 +230,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
         const result = await api("/api/desk", body);
         if (result.temporaryPassword) setStaffPassword("Temporary password: " + result.temporaryPassword);
         await refresh();
-      }
-      if (body.action === "collect") {
-        pdfRequest.current++; setSelectedId(null); setPdfUrl(""); setPdfLoading(false); setPdfError("");
       }
       if (body.action === "create_staff") { staffForm.current?.reset(); setStaffPassword(""); }
       if (body.action === "delete_staff") setStaffPassword("");
@@ -326,9 +325,26 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   function reserveWhatsAppTab() {
     try {
       const popup = window.open("about:blank", "_blank");
-      if (popup) { popup.opener = null; popup.document.title = "Preparing WhatsApp"; popup.document.body.textContent = "Preparing your bill message…"; }
+      if (popup) { popup.opener = null; popup.document.title = "Preparing WhatsApp"; popup.document.body.textContent = "Preparing your message…"; }
       return popup;
     } catch { return null; }
+  }
+  function issueGatePass(bill: DeskBill) {
+    if (demo || busy) return;
+    let phone: string;
+    try { phone = customerPhone(phoneFor(bill)); } catch (e) { setNotice((e as Error).message); return; }
+    const popup = reserveWhatsAppTab();
+    setGateLinks(current => ({ ...current, [bill.id]: "" }));
+    void perform(async () => {
+      try {
+        const response = await fetch("/api/gate-passes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ billId: bill.id, phone }) });
+        const result = await response.json();
+        if (!response.ok) throw new Error((result.error || "Gate pass could not be prepared.") + (result.blockers?.length ? " Bills: " + result.blockers.map((b: { reference: string }) => b.reference).join(", ") : ""));
+        setGateLinks(current => ({ ...current, [bill.id]: result.whatsappUrl }));
+        try { if (popup && !popup.closed) popup.location.replace(result.whatsappUrl); } catch { popup?.close(); }
+        setNotice("Gate pass saved. Press Send in WhatsApp. If it did not open, use the WhatsApp icon below. Reissuing an active pass preserves its QR and expiry.");
+      } catch (e) { popup?.close(); throw e; }
+    });
   }
   async function prepareWhatsApp(bill: DeskBill, phone: string, popup: Window | null) {
     const result = await api(`/api/bills/${bill.id}/whatsapp`, { customerPhone: phone });
@@ -535,6 +551,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
 
   if (profile.must_change_password) return <div className="sd-loading"><div className="sd-password"><Brand/><h1>Set your own password.</h1><p>Your temporary password must be changed before you can access bills.</p><form onSubmit={e => { e.preventDefault(); void action({ action: "password", password: new FormData(e.currentTarget).get("password") }); }}><label>New password<input name="password" type="password" minLength={12} maxLength={128} required autoComplete="new-password"/></label><button className="sd-primary" disabled={busy}>Save password</button></form><p role="status">{notice}</p><button className="sd-plain" onClick={() => void logout()}>Sign out</button></div></div>;
 
+  if (profile.role === "security") return <DeskShell>{demo ? <><p>Gate-pass verification requires a connected staff account.</p><button onClick={() => void logout()}>Sign out</button></> : <a href="/security">Open security workspace</a>}</DeskShell>;
   const visible: Snapshot = profile.role === "service_advisor" ? { ...data, bills: data.bills.filter(b => b.uploaded_by === profile.id) } : data;
   const summary = report(visible, advisor);
   const daily = profile.role === "cashier" ? cashierDailyReport(visible, analyticsDay) : null;
@@ -561,7 +578,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       {notice && <div className="sd-notice" role="status">{notice}<button aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}
       {tab === "staff" && profile.role === "super_admin" ? <section className="sd-panel">
         <h2>Create a staff account</h2><form ref={staffForm} className="sd-staff-form" onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void action({ action: "create_staff", staffId: f.get("staffId"), fullName: f.get("fullName"), role: f.get("role"), password: f.get("password") }); }}>
-          <label>Full name<input name="fullName" maxLength={100} required/></label><label>User ID<input name="staffId" autoComplete="off" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Password<input name="password" type="password" minLength={6} maxLength={8} placeholder="6–8 characters" autoComplete="new-password" required/></label><label>Role<select name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
+          <label>Full name<input name="fullName" maxLength={100} required/></label><label>User ID<input name="staffId" autoComplete="off" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Password<input name="password" type="password" minLength={6} maxLength={8} placeholder="6–8 characters" autoComplete="new-password" required/></label><label>Role<select name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option><option value="security">Security</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
         </form>{staffPassword && <div className="sd-alert"><strong>Share privately; shown for this session only.</strong><p><code>{staffPassword}</code></p><button onClick={() => setStaffPassword("")}>Dismiss</button></div>}
         <div className="sd-table-wrap"><table><thead><tr><th>Name / User ID</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{data.staff.map(p => <tr key={p.id}><td><strong>{p.full_name}</strong><small>{p.staff_id}</small></td><td>{labels[p.role]}</td><td>{p.active ? "Active" : "Disabled"}{p.must_change_password ? " · Temporary password" : ""}</td><td>{p.id !== profile.id && <div className="sd-actions"><button disabled={busy} onClick={() => void action({ action: "reset_staff", target: p.id })}>Reset password</button><button disabled={busy} onClick={() => void action({ action: "toggle_staff", target: p.id, active: !p.active })}>{p.active ? "Disable" : "Enable"}</button>{p.staff_id !== "admin01" && <button className="sd-danger" disabled={busy} onClick={() => { if (window.confirm(`Permanently delete ${p.full_name} (${p.staff_id})? Their account and access will be removed. Bill and collection history will be retained.`)) void action({ action: "delete_staff", target: p.id }); }}><Trash2 size={16}/>Delete account</button>}</div>}</td></tr>)}</tbody></table></div>
       </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
@@ -635,6 +652,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
         {!demo && profile.role === "super_admin" && selected.approval_status === "pending" && selected.amount_paise === null && !isSupportingNote(selected) && <button disabled={busy} onClick={() => void action({action:"reextract",target:selected.id})}>Re-read original PDF</button>}
       </div>
       {profile.role === "cashier" && selected.uploads?.confirmed_at && !isSupportingNote(selected) && !isPaid(selected,data.payments) && <PaymentForm key={selected.id} bill={selected} busy={busy} onConfirm={(method, otherMethod, transactionId) => void action({ action: "collect", target: selected.id, method, otherMethod, transactionId })}/>}
+      {profile.role === "cashier" && isPaid(selected, data.payments) && <section className="sd-related"><h3>Vehicle gate pass</h3><p>All submitted bills for this customer and vehicle must be cleared.</p><label>Customer WhatsApp number<input type="tel" autoComplete="tel" maxLength={40} disabled={busy} value={phoneFor(selected)} onChange={e => { setPhones(current => ({ ...current, [selected.id]: e.target.value })); setGateLinks(current => ({ ...current, [selected.id]: "" })); }}/></label><div className="sd-actions"><button className="sd-primary" disabled={demo || busy} onClick={() => issueGatePass(selected)}>Issue gate pass</button>{gateLinks[selected.id] && <a className="sd-whatsapp-action" href={gateLinks[selected.id]} target="_blank" rel="noreferrer" aria-label="Open gate pass in WhatsApp"><WhatsAppIcon/></a>}</div></section>}
       <h3>Full-bill collection history</h3>{data.payments.filter(p => p.bill_id === selected.id && !p.is_archived).map(p => <div className="sd-payment" key={p.id}><div><strong>{money(p.amount_paise)}</strong><small>{dateTime(p.occurred_at)} · {person(p.recorded_by)} · {p.method} · {p.source !== "reversal" ? "Full bill collected" : "Full collection reversed"}</small>{p.transaction_id && <small>{paymentReferenceLabel(p.method) || "Transaction ID"}: {p.transaction_id}</small>}{p.reason && <p>{p.reason}</p>}</div>{profile.role === "super_admin" && p.source !== "reversal" && !data.payments.some(r => r.reversal_of === p.id) && <button disabled={busy} onClick={() => { const reason = window.prompt("Why is this payment entry incorrect? This is a correction, not a customer refund."); if (reason) void action({ action: "reverse", target: p.id, reason }); }}>Reverse entry</button>}</div>)}
       {!data.payments.some(p => p.bill_id === selected.id && !p.is_archived) && <p className="sd-muted">No collection recorded. An invoice alone does not confirm payment.</p>}
       {selectedGroup && <section className="sd-related"><h3>This customer’s bills</h3><p>{selectedGroup.name}{selectedGroup.reference ? " · Customer ID " + selectedGroup.reference : ""}</p><strong>{selectedGroup.bills.length} bill{selectedGroup.bills.length === 1 ? "" : "s"} · {selectedGroup.bills.some(b => b.amount_paise !== null) ? money(selectedGroup.total) + " stated invoice value" : "No monetary total stated"}{selectedGroup.missingAmounts > 0 ? " (some totals unread)" : ""}</strong><small>All accessible bills, including those awaiting approval.</small>{selectedGroup.bills.map(b => <button key={b.id} aria-current={b.id === selected.id ? "true" : undefined} onClick={() => { selectBill(b.id); }}><span>{b.invoice_reference || "Invoice not read"}<small>{billType(b)}</small><small>{b.invoice_date || "Date not read"} · {b.vehicle_no_display || "Vehicle not read"}</small></span><strong>{billAmount(b)}</strong><ChevronRight size={15}/></button>)}</section>}

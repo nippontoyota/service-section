@@ -136,3 +136,12 @@ Optional integration checks do not add production dependencies:
 The app-managed login and Supabase Storage need a configured-project smoke test before deploying. Local database tests emulate the legacy auth/storage schemas but do not contact a hosted Supabase service.
 
 WhatsApp integration check: build with `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120`, then run `PLAYWRIGHT_PATH=/path/to/playwright node scripts/check-whatsapp-browser.mjs`. It starts an isolated backend, exercises real application routes and intercepts WhatsApp handoffs without sending messages. The storage/database stub tests short-link hashes, anonymous GET/HEAD, expiry, repeat downloads, safe failures and streaming PDFs above 4.5 MB; production Supabase and real-device WhatsApp handoffs still need a controlled pilot.
+
+
+## Gate passes after payment
+
+Cashiers can **Issue gate pass** from the paid bill dialog or Archive. The server checks every submitted bill for the identified customer and normalized vehicle, across advisors, and lists blockers. Supporting notes without payable amounts do not block clearance. The saved customer number can be corrected before preparing the preset WhatsApp message. The cashier presses Send; the WhatsApp icon remains available if the popup was blocked.
+
+Customers open `/g/[code]` without login to see their QR, registration, name, pass number, expiry and status. Passes last 24 hours and permit one exit. Reissuing an active pass preserves its code and expiry; replacing an expired or revoked unused pass repeats payment checks. A completed pass cannot cover a later visit, which requires newly submitted bills. New bills require replacement coverage even after settlement; reversing a covered payment revokes unused passes.
+
+Administrators create **Security** staff through the existing account controls. These users enter `/security`, scan with the rear camera or paste a BillDesk gate-pass link, compare the vehicle and tap **Confirm exit**. Verification requires a working connection. Security accounts have no access to financial records, invoice PDFs, uploads or staff management. See [deployment instructions](DEPLOYMENT.md#qr-gate-passes) for the migration, signing secret, validation and two-phone pilot.
