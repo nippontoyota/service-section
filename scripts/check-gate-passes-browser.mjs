@@ -9,7 +9,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_PATH ? process.env.PLAY
 const base='http://127.0.0.1:3131', backend='http://127.0.0.1:3120';
 const secret='isolated-gate-secret-'.repeat(3), cashier={id:randomUUID(),staff_id:'cashier_test',full_name:'Test Cashier',role:'cashier',active:true,must_change_password:false};
 const guard={...cashier,id:randomUUID(),staff_id:'guard_test',full_name:'Test Guard',role:'security'};
-const bill={id:randomUUID(),upload_id:randomUUID(),customer_id:randomUUID(),customer_name:'Synthetic Customer',customer_phone:'+919876543210',customer_reference:'TEST',vehicle_no_display:'KL01AB1234',vin:'',invoice_reference:'GATE-TEST',invoice_date:'2026-11-14',amount_paise:10000,approval_status:'pending',created_at:new Date().toISOString(),page_from:1,page_to:1,extraction_issues:[],amount_evidence:'Total 100',payment_evidence:[],uploads:{confirmed_at:new Date().toISOString(),original_filename:'synthetic.pdf'}};
+const bill={id:randomUUID(),upload_id:randomUUID(),customer_id:randomUUID(),customer_name:'Synthetic Customer',customer_phone:'+919999999999',customer_reference:'TEST',vehicle_no_display:'KL01AB1234',vin:'',invoice_reference:'GATE-TEST',invoice_date:'2026-11-14',amount_paise:10000,approval_status:'pending',created_at:new Date().toISOString(),page_from:1,page_to:1,extraction_issues:[],amount_evidence:'Total 100',payment_evidence:[],uploads:{confirmed_at:new Date().toISOString(),original_filename:'synthetic.pdf'}};
 const notes=['warranty_note','amc_note'].map(kind=>({...bill,id:randomUUID(),upload_id:randomUUID(),invoice_reference:kind,amount_paise:null,amount_evidence:'No monetary total stated; supporting note',field_confidence:{document:{kind}}}));
 const unread={...bill,id:randomUUID(),invoice_reference:'UNREAD-TOTAL',amount_paise:null};
 const draft={...notes[0],id:randomUUID(),invoice_reference:'DRAFT-NOTE',uploads:{...bill.uploads,confirmed_at:null}};
@@ -79,9 +79,15 @@ try{
   assert.doesNotMatch(await dialog.innerText(),/An invoice alone does not confirm payment/);
   assert.equal(await page.getByLabel('Mode of payment').count(),0);
   assert.equal(await page.getByRole('button',{name:/Mark as paid/}).count(),0);
-  assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'+919876543210');
+  assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'','Cashier must enter the number; ignore saved advisor contact');
+  const beforeIssue=calls.filter(path=>path.endsWith('app_issue_gate_pass')).length;
+  await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
+  await page.getByText('Enter a valid customer WhatsApp number with country code',{exact:true}).last().waitFor();
+  assert.equal(calls.filter(path=>path.endsWith('app_issue_gate_pass')).length,beforeIssue);
+  await page.getByLabel('Customer WhatsApp number').fill('+919876543210');
   await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
   await page.getByRole('link',{name:'Open gate pass in WhatsApp'}).waitFor();
+  await page.getByLabel('Customer WhatsApp number').fill('+919876543210');
   for(const reference of ['UNPAID-OTHER-ADVISOR','UNREAD-TOTAL']){
    blockers=reference;await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
    await page.getByText('Payment not cleared. Bills: '+reference,{exact:true}).last().waitFor();
@@ -103,7 +109,7 @@ try{
  await heldPayment.continue(); await page.unroute('**/api/desk');
  await page.getByRole('dialog',{name:'Payment recorded',exact:true}).locator('.sd-operation-tick').waitFor();
  await page.getByRole('button',{name:'Issue gate pass',exact:true}).waitFor();
- assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'+919876543210');
+ assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'','Cashier must enter the number; ignore saved advisor contact');
  await page.getByLabel('Customer WhatsApp number').fill('');await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
  await page.getByText('Enter a valid customer WhatsApp number with country code',{exact:true}).last().waitFor();
  await page.getByLabel('Customer WhatsApp number').fill('+919876543210');blockers='UNPAID-OTHER-ADVISOR';

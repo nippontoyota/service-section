@@ -29,7 +29,7 @@ try {
   for (const route of ["api/uploads/[id]/process", "api/desk", "api/bills/[id]/whatsapp", "api/bills/[id]/attachment", "b/[code]", "g/[code]"]) {
     const trace = resolve(root, ".next/server/app", route, "route.js.nft.json");
     const { files } = JSON.parse(readFileSync(trace, "utf8"));
-    if (route.startsWith("api/") && !route.endsWith("/attachment")) {
+    if (route.startsWith("api/") && !route.endsWith("/attachment") && !route.endsWith("/whatsapp")) {
       assert(files.some(file => file.endsWith("/pdf.worker.mjs")), `${route}: missing PDF worker`);
       assert(files.some(file => /canvas.*\.node$/.test(file)), `${route}: missing native canvas`);
     }

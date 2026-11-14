@@ -115,9 +115,8 @@ Internal authenticated routes:
 - GET /api/desk: current profile and a consistent bill/payment/staff/audit snapshot.
 - POST /api/desk: password, approve, collect, reverse, pdf, reextract, create_staff, reset_staff, toggle_staff or delete_staff.
 - Existing upload init/process endpoints remain; only advisors can use them.
-- POST /api/uploads/[id]/confirm: `tokens` keyed by bill ID and `contacts` keyed by bill ID, each containing `{ phone, skipWhatsApp }`. Every bill needs a valid phone or an explicit skip. Token requirements come from the server deployment setting, not request input. Confirmation remains atomic per PDF and retry-safe.
-- POST /api/bills/[id]/whatsapp: `{ customerPhone, billIds? }`; returns `{ whatsappUrl, message, billIds, attachments }`, with each attachment containing `{ billId, filename, url }`. Requires the uploading advisor and submitted bills belonging to one customer. Explicit IDs restrict sharing to that batch; omitted IDs include the advisor's submitted bills for that customer. Creates/reuses private customer-only PDFs and records attachment preparation, without new public links or an expiry.
-- GET /api/bills/[id]/attachment: streams the prepared PDF to its authenticated uploading advisor with an attachment filename and no-store caching. Staff use device file sharing where supported, or download the PDFs and attach them manually in the prefilled WhatsApp chat. No sent/delivered status is inferred. Existing `/b/[code]` links remain valid until expiry.
+- POST /api/uploads/[id]/confirm: `tokens` keyed by bill ID. Advisors submit bills to the cashier without customer phone numbers or a WhatsApp choice. The server derives the existing transaction's no-sharing contacts for the owned bills and ignores legacy client contact payloads. Token requirements remain server-enforced, and confirmation remains atomic per PDF and retry-safe.
+- POST /api/bills/[id]/whatsapp and GET /api/bills/[id]/attachment: retired; return HTTP 410. Customer bill delivery is handled outside BillDesk. Existing `/b/[code]` links remain valid until their original expiry; staff original-PDF viewing is unchanged.
 - POST /api/demo/extract: real PDF parsing for development-only demo uploads; disabled in production.
 - GET /api/demo/reference-bills: parse the three fixed local reference PDFs. The file query parameter serves only one of those three originals. Disabled in production.
 
@@ -138,12 +137,12 @@ Optional integration checks do not add production dependencies:
 
 The app-managed login and Supabase Storage need a configured-project smoke test before deploying. Local database tests emulate the legacy auth/storage schemas but do not contact a hosted Supabase service.
 
-WhatsApp integration check: build with `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120`, then run `PLAYWRIGHT_PATH=/path/to/playwright node scripts/check-whatsapp-browser.mjs`. It starts an isolated backend, exercises real application routes and intercepts WhatsApp handoffs without sending messages. The storage/database stub tests short-link hashes, anonymous GET/HEAD, expiry, repeat downloads, safe failures and streaming PDFs above 4.5 MB; production Supabase and real-device WhatsApp handoffs still need a controlled pilot.
+Advisor submission regression: build with `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:3120`, then run `PLAYWRIGHT_PATH=/path/to/playwright node scripts/check-whatsapp-browser.mjs`. The isolated test verifies no advisor sharing UI, phone-free submissions, ignored legacy contacts, retired sharing routes, required tokens, partial retries and timeout recovery. No production data or customer messages are used.
 
 
 ## Gate passes after payment
 
-Cashiers can **Issue gate pass** from the paid bill dialog or Archive. The server checks every submitted bill for the identified customer and normalized vehicle, across advisors, and lists blockers. Supporting notes without payable amounts do not block clearance. The saved customer number can be corrected before preparing the preset WhatsApp message. The cashier presses Send; the WhatsApp icon remains available if the popup was blocked.
+Cashiers can **Issue gate pass** from the paid bill dialog or Archive. The server checks every submitted bill for the identified customer and normalized vehicle, across advisors, and lists blockers. Supporting notes without payable amounts do not block clearance. The cashier enters the customer WhatsApp number in the gate-pass section. The field starts blank and never falls back to a bill/advisor phone number; only the cashier’s entry is used. The cashier presses Send; the WhatsApp icon remains available if the popup was blocked.
 
 Customers open `/g/[code]` without login to see their QR, registration, name, pass number, expiry and status. Passes last 24 hours and permit one exit. Reissuing an active pass preserves its code and expiry; replacing an expired or revoked unused pass repeats payment checks. A completed pass cannot cover a later visit, which requires newly submitted bills. New bills require replacement coverage even after settlement; reversing a covered payment revokes unused passes.
 

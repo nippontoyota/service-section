@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { AuthenticationError, requireRole } from "@/lib/supabase-server";
 import { tokenNumber } from "@/lib/desk";
-import { billContacts } from "@/lib/whatsapp";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -9,14 +8,18 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { user, service } = await requireRole(request, "service_advisor");
     const body = await request.json();
     const tokens = body?.tokens ?? {};
-    if (typeof tokens !== "object" || Array.isArray(tokens)) return NextResponse.json({ error: "Invalid token numbers" }, { status: 400 });
+    if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) return NextResponse.json({ error: "Invalid token numbers" }, { status: 400 });
     let normalizedTokens: Record<string, string | null>;
-    let contacts;
     try {
       normalizedTokens = Object.fromEntries(Object.entries(tokens).map(([key, value]) => [key, tokenNumber(value)]));
-      contacts = billContacts(body?.contacts);
     }
     catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 400 }); }
+    // Bill delivery is external. Ignore legacy client phone/sharing choices and
+    // use the existing transaction's no-sharing path for every owned bill.
+    const { data: bills, error: billsError } = await service.from("bills")
+      .select("id").eq("upload_id", id).eq("uploaded_by", user.id);
+    if (billsError || !bills) return NextResponse.json({ error: "Could not load the bills for submission. Please retry." }, { status: 503 });
+    const contacts = Object.fromEntries(bills.map(bill => [bill.id, { phone: null, skipWhatsApp: true }]));
     const { data, error } = await service.rpc("app_confirm_upload", {
       staff: user.id, target: id, tokens: normalizedTokens, contacts,
       require_token: process.env.BILLDESK_REQUIRE_TOKEN === "true",

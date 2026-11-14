@@ -107,29 +107,27 @@ Apply `supabase/migrations/202611100002_transaction_id_and_delete_staff.sql` bef
 Apply `supabase/migrations/202611100003_required_payment_references.sql` for mandatory GPay and Demand Draft transaction IDs and cheque numbers. Validation runs in the cashier form, server and collection RPC. Historical payments remain unchanged and can still be reversed; Cash and Other do not require or save references.
 
 
-## WhatsApp sharing
+## Customer bill delivery
 
-Apply `supabase/migrations/202611110001_whatsapp_sharing.sql` immediately before deploying this release, after all preceding migrations. It adds nullable bill phone numbers, replaces the confirmation RPC with explicit per-bill contact/skip validation, and adds the advisor-only preparation RPC. The older application cannot submit against the new confirmation signature; coordinate migration and deployment in a short maintenance window. No historical bill, payment, or PDF is removed.
+Customer bill delivery is handled outside BillDesk. Advisors upload/read PDFs, review details and tokens, then choose **Submit to cashier** or **Submit all to cashier**. There are no advisor phone fields, sharing queues, message previews or attachment-sharing controls. Old browser sharing queues are cleared on login.
 
-Set `BILLDESK_REQUIRE_TOKEN=true` for branches that require a token on every new submission, or leave it unset/false to keep tokens optional. This server-only setting is passed to the UI and enforced by the confirmation endpoint and RPC; browser input cannot override it. Each deployment represents one branch.
+This release requires no new migration or environment variable. Keep previously applied migrations: the confirmation endpoint uses the existing atomic `app_confirm_upload` transaction with server-derived no-sharing contacts. It ignores any old client phone/sharing payload. The existing RPC still records its legacy `whatsapp_skipped` audit event; no new message or PDF copy is prepared. Token requirements, confirmation retry handling and the duplicate-PDF constraint remain unchanged.
 
-Apply `supabase/migrations/202611140003_bill_attachments.sql` after the earlier migrations and before deploying attachment sharing. It replaces only the existing `app_prepare_whatsapp` function: null expiry records `mode: attachment`, while a future expiry still supports older link-based callers. It retains existing bills, payments, PDFs, customer links, and audit history. For an application rollback, leave this backward-compatible migration in place.
+`POST /api/bills/[id]/whatsapp` and `GET /api/bills/[id]/attachment` return HTTP 410 so older clients cannot create new bill shares. The existing `/b/[code]` reader remains available for already-issued links until expiry, and staff original-PDF viewing continues normally. No historical records or PDFs are deleted by this release.
 
-Customer copies remain in the private `bills` bucket under `customer-copies/v1/`. New preparation returns authenticated attachment download descriptors instead of public links. The server validates advisor ownership, submission and customer identity before preparing each selected bill's pages. The download route rechecks the current session and ownership and streams the private copy without storage redirects or credentials. Gate-pass QR links and previously issued customer links are unchanged.
+Cashier gate-pass WhatsApp remains enabled. Its number field starts blank, uses only the cashier's current entry, and clears a prepared handoff when that entry changes. It does not read `bills.customer_phone`. Gate-pass phone validation, payment clearance, QR generation and security verification remain unchanged.
 
-The phone workflow uses a fresh **Share PDFs** click after files are loaded; staff choose WhatsApp and the recipient. Native sharing passes files only because target apps differ in their handling of accompanying text; **Copy message** is available separately. Unsupported devices use individual **Download PDF** links plus **Open customer chat**. Staff attach files and press Send themselves. Cancellation leaves files available; preparation/retry never resubmits bills. The app does not claim delivery. No WhatsApp Business API account or new environment variable is required.
-
-Run unit, database, build, deployment-bundle and isolated browser checks. Browser checks use synthetic PDFs and intercept handoffs; they never send customer messages. A physical-device check should verify the installed WhatsApp app is offered as a PDF share target and that the intended recipient receives the files, using a controlled recipient only.
+Run the advisor regression (`scripts/check-whatsapp-browser.mjs`), batch upload, auth and gate-pass browser checks using the isolated backend. They never send WhatsApp messages or modify production data.
 
 ## Short customer bill links
 
 Apply the additive `supabase/migrations/202611140001_customer_bill_links.sql` before deploying the short-link route. It creates `customer_bill_links` with row-level security and no anonymous/authenticated grants; only the service role can read or write mappings. No raw codes are stored. Existing bills and signed links are unchanged.
 
-Set server-only `BILLDESK_PUBLIC_URL=https://billdesk-rho.vercel.app` in Production, then deploy. Preview/test deployments must use their own explicit origin (the isolated browser test sets `http://127.0.0.1:3119`). This origin remains required for gate-pass creation; new bill attachments do not depend on it. Never derive this origin from the request host.
+Set server-only `BILLDESK_PUBLIC_URL=https://billdesk-rho.vercel.app` in Production, then deploy. Preview/test deployments must use their own explicit origin (the isolated browser test sets `http://127.0.0.1:3119`). This origin remains required for gate-pass creation. Never derive this origin from the request host.
 
 `GET` and `HEAD /b/[code]` validate the code and expiry before storage access. Responses use a generic inline PDF filename, private/no-store caching, no-index and no-referrer headers. The PDF body is streamed without redirects or storage headers, following [Vercel streaming guidance](https://vercel.com/kb/guide/how-to-bypass-vercel-body-size-limit-serverless-functions). HEAD/preview requests do not consume a link. Invalid links return 404, expired links 410, and database/storage outages 503 without internal details. An upstream interruption after streaming starts ends the download; the customer can retry the same link.
 
-Run the unit, database, build, deployment-bundle and isolated WhatsApp browser checks before pushing. The browser check includes an actual synthetic PDF over 4.5 MB, checks that bytes arrive before the storage response finishes, and verifies two isolated bill copies with matching headings. After deployment, use synthetic PDFs to verify anonymous GET/HEAD and repeat downloads at the production domain, byte-for-byte delivery above 4.5 MB, expiry and no storage redirects/headers. Do not send pilot WhatsApp messages without a controlled recipient.
+The legacy link reader is retained for previously issued links; new customer bill links are no longer created.
 
 
 ## QR gate passes
@@ -167,14 +165,10 @@ Do not run the historical production-reset script against an installation with g
 
 ## Submission and operation feedback
 
-This release changes only client feedback and sharing controls. It needs no migration, API contract, permission, or financial-rule changes. Complete submissions close the advisor dialogs and retain separate customer cards on the workspace. A single customer keeps the automatic WhatsApp handoff; multiple customers each have an **Open WhatsApp** action. Prepared messages retain **Open again** and **Dismiss** controls. Only batch bill IDs are saved for reload recovery; private handoff URLs remain in memory.
-
-Foreground actions use shared Toyota processing, success, and failure feedback. Individual requests time out at 120 seconds. A timed-out write has an uncertain result: staff must refresh status before another write, and confirmed uploads are reconciled out of the retry queue. Message-preparation retries never repeat bill submission. Successful writes remain successful if the subsequent workspace refresh fails; the workspace displays a separate warning.
-
-In addition to the unit, database, production-build, and deployment-bundle checks, run the isolated batch, WhatsApp, gate-pass, and authentication browser suites above. `scripts/check-operation-browser.mjs` uses synthetic intercepted responses to cover staff/password changes, slow requests, reduced motion, duplicate prevention, refresh warnings, and uncertain timeout recovery. The WhatsApp suite checks three bills for two customers, exact completed counts, independent cards, and a committed submission whose response is lost. None of these suites sends WhatsApp messages.
+Full-screen loading is reserved for sign-in/out, PDF upload/read and cashier WhatsApp gate-pass preparation. Advisor submissions use inline pending feedback and the existing brief success screen. Successful batches close advisor dialogs; partial failures preserve the retry queue. Timed-out writes require a status refresh before retrying. Cashier payment details stay open after collection.
 
 Batch PDF uploads now use four concurrent upload/read workers in the connected workspace (two in the local demo); confirmations continue to use two workers. The operation dialog shows the percentage of PDFs successfully ready for review, each file’s state, and byte-based upload percentages. Server-side reading has no fabricated per-page percentage. Failed PDFs do not increase the ready count. This update has no API, database, parser, or extraction-rule changes.
 
 ## Loading feedback
 
-Full-screen pending feedback is reserved for sign-in/out, PDF upload/read, and WhatsApp submission/preparation (including gate-pass WhatsApp preparation). Other actions use inline status and existing action locks. All confirmed successful actions retain the brief success screen; failures and uncertain writes retain their recovery flow. Submission with WhatsApp explicitly skipped stays inline. The four-worker PDF pipeline and real ready/total percentage are unchanged.
+Full-screen pending feedback is reserved for sign-in/out, PDF upload/read, and cashier WhatsApp gate-pass preparation. Other actions use inline status and existing action locks. All confirmed successful actions retain the brief success screen; failures and uncertain writes retain their recovery flow. Advisor submission stays inline. The four-worker PDF pipeline and real ready/total percentage are unchanged.

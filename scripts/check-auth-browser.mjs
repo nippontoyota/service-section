@@ -40,7 +40,7 @@ try {
  await ready(()=>snapshotReply);
  assert.ok(snapshotReply);assert.equal(await progress.isVisible(),true);
  await page.getByRole('button',{name:'Upload bills',exact:true,includeHidden:true}).waitFor({state:'attached'});
- assert.equal(await page.evaluate(()=>sessionStorage.getItem('desk-sharing-batch:test-cashier')),'["draft-id"]','Signing in must retain recovery IDs until the real snapshot arrives');
+ assert.equal(await page.evaluate(()=>sessionStorage.getItem('desk-sharing-batch:test-cashier')),null,'Retired advisor sharing queues must be cleared');
  await snapshotReply();
  await page.getByRole('button',{name:'Sign out',exact:true}).waitFor();
  await page.emulateMedia({reducedMotion:'reduce'});

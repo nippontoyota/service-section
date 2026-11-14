@@ -133,7 +133,7 @@ try {
     if (width === 1440) { await page.getByRole("dialog", { name: "Upload and review bills" }).evaluate(el => { el.scrollTop = 0; }); await page.screenshot({ path: "/tmp/billdesk-upload-tiles-desktop.png" }); }
     if (width === 320) await page.screenshot({ path: "/tmp/billdesk-upload-320.png", fullPage: true });
   }
-  await click("Submit all without WhatsApp"); await page.getByText("Synthetic submission failure", { exact: true }).waitFor(); await page.waitForFunction(() => document.querySelectorAll(".sd-queue-item").length === 1); assert.equal(maxConfirm, 2); assert.equal(await page.locator(".sd-queue-item").count(), 1);
+  await click("Submit all to cashier"); await page.getByText("Synthetic submission failure", { exact: true }).waitFor(); await page.waitForFunction(() => document.querySelectorAll(".sd-queue-item").length === 1); assert.equal(maxConfirm, 2); assert.equal(await page.locator(".sd-queue-item").count(), 1);
   // Valid server session restores the draft without rendering login or fetching the desk twice.
   let clientDeskGets = 0; page.on("request", req => { if (new URL(req.url()).pathname === "/api/desk" && req.method() === "GET") clientDeskGets++; });
   sessionDelay = 500; await page.reload(); await page.getByRole("button", { name: "Upload bills (1)", exact: true }).waitFor();
@@ -143,7 +143,7 @@ try {
   await page.waitForFunction(() => performance.getEntriesByName("pdf-display").length > 0);
   assert.equal(signedRequests, 1, "Details prefetch and repeated view share the same signed request"); assert.equal(downloadRequests, 1);
   console.log("Controlled first stored-view timings (ms):", await page.evaluate(() => Object.fromEntries(["pdf-authorization","pdf-signing","pdf-download","pdf-display"].map(name => [name, performance.getEntriesByName(name).at(-1)?.duration]))));
-  await click("Close bill details"); await click("Submit all without WhatsApp"); await page.getByRole("dialog", {name:"Upload and review bills"}).waitFor({state:"hidden"});
+  await click("Close bill details"); await click("Submit to cashier"); await page.getByRole("dialog", {name:"Upload and review bills"}).waitFor({state:"hidden"});
   await click("Upload bills");
   await pick(Array.from({ length: 12 }, (_, i) => `limit-${i}.pdf`)); assert.equal(await page.locator(".sd-queue-item").count(), 10);
   await pick(["limit-0.pdf"]); assert.equal(await page.locator(".sd-queue-item").count(), 10);

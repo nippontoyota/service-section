@@ -11,7 +11,7 @@ import { DeskShell } from "./desk-shell";
 import { Brand, ToyotaEmblem } from "./desk-brand";
 import { fileIdentity, selectFiles, restoreDrafts, withWorkers, type UploadFile } from "@/lib/upload-queue";
 import { PdfLinks } from "@/lib/pdf-preview";
-import { billContacts, customerContactKey, customerPhone, customerShareBills, savedCustomerPhone, whatsappMessage, type BillAttachment } from "@/lib/whatsapp";
+import { customerPhone } from "@/lib/whatsapp";
 import { readApiResponse } from "@/lib/api-response";
 import { OperationDialog, OperationStatus, useOperation } from "./operation-feedback";
 import { boundedRequest, requestJson, RequestTimeoutError } from "@/lib/operation";
@@ -44,16 +44,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   const feedback = useOperation();
   const uncertain = useRef(false);
   const [needsRefresh, setNeedsRefresh] = useState(false);
-  const sharingSection = useRef<HTMLElement>(null);
-  const focusSharing = useRef(false);
-  const [sharingErrors, setSharingErrors] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!feedback.operation && focusSharing.current) {
-      focusSharing.current = false;
-      sharingSection.current?.focus();
-      sharingSection.current?.scrollIntoView({ block: "start" });
-    }
-  }, [feedback.operation]);
   const [authTransition, setAuthTransition] = useState<"in" | "out" | null>(null);
   const authLock = useRef(false);
   const [notice, setNotice] = useState(initialError);
@@ -67,11 +57,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   const [analyticsDay, setAnalyticsDay] = useState(() => indiaDate());
   const [tokens, setTokens] = useState<Record<string, string>>({});
   const [phones, setPhones] = useState<Record<string, string>>({});
-  const [skips, setSkips] = useState<Record<string, boolean>>({});
-  const [sharingBills, setSharingBills] = useState<DeskBill[]>([]);
-  const [sharedBatches, setSharedBatches] = useState<DeskBill[][]>([]);
   const [gateLinks, setGateLinks] = useState<Record<string, string>>({});
-  const [prepared, setPrepared] = useState<Record<string, { url: string; phone: string; message: string; billIds: string[]; attachments: BillAttachment[]; files?: File[] }>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
   const [files, setFiles] = useState<UploadFile[]>(() => initial?.profile.role === "service_advisor" && initial.snapshot ? restoreDrafts(initial.snapshot) : []);
@@ -87,7 +73,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState("");
   const profileId = useRef(initial?.profile.id);
-  const restoredSharingFor = useRef<string | null>(null);
   const initialFetch = useRef(demo || Boolean(initialError));
   const clearPreviews = useCallback(() => {
     pdfRequest.current++;
@@ -100,7 +85,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     setData(snapshot); setProfile(user); setRestoring(false); setRefreshError("");
     if (user?.id !== profileId.current) {
       clearPreviews(); setFiles([]); setSelectedId(null); setUploadOpen(false);
-      setPhones({}); setSkips({}); setPrepared({}); setSharingErrors({}); setGateLinks({}); setSharingBills([]); setSharedBatches([]); setTokens({});
+      setPhones({}); setGateLinks({}); setTokens({});
       setTab(user?.role === "cashier" ? "overview" : demo ? "bills" : "overview");
       profileId.current = user?.id;
     }
@@ -114,30 +99,15 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       });
       return [...retained, ...recovered.filter(d => !retained.some(f => f.uploadId === d.uploadId))];
     });
-    if (user?.role === "service_advisor" && restoredSharingFor.current !== user.id) {
-      restoredSharingFor.current = user.id;
-      try {
-        const saved: unknown = JSON.parse(sessionStorage.getItem("desk-shared-batches:" + user.id) || "[]");
-        if (Array.isArray(saved)) setSharedBatches(saved.filter(Array.isArray).map(ids => snapshot.bills.filter(b => b.uploaded_by === user.id && b.uploads?.confirmed_at && ids.includes(b.id))).filter(batch => batch.length));
-        const ids: unknown = JSON.parse(sessionStorage.getItem("desk-sharing-batch:" + user.id) || "null");
-        if (Array.isArray(ids)) {
-          const candidates = new Map([...snapshot.bills, ...restoreDrafts(snapshot).flatMap(f => f.bills)].filter(b => b.uploaded_by === user.id).map(b => [b.id, b]));
-          const remembered = ids.flatMap(id => typeof id === "string" && candidates.has(id) ? [candidates.get(id)!] : []);
-          const submitted = remembered.filter(b => b.uploads?.confirmed_at && b.customer_phone);
-          if (remembered.some(b => !b.uploads?.confirmed_at)) setSharingBills(submitted);
-          else {
-            setSharingBills([]);
-            if (submitted.length) setSharedBatches(current => [...current, submitted]);
-            sessionStorage.removeItem("desk-sharing-batch:" + user.id);
-          }
-        }
-      } catch { /* The live queue still works when browser storage is unavailable. */ }
-    }
   }, [clearPreviews, demo]);
   useEffect(() => {
-    if (profile?.role !== "service_advisor" || restoredSharingFor.current !== profile.id) return;
-    try { sessionStorage.setItem("desk-shared-batches:" + profile.id, JSON.stringify(sharedBatches.map(batch => batch.map(b => b.id)))); } catch { /* Optional recovery. */ }
-  }, [profile, sharedBatches]);
+    if (!profile) return;
+    // Retired customer-sharing queues must not reappear from an older browser session.
+    try {
+      sessionStorage.removeItem("desk-sharing-batch:" + profile.id);
+      sessionStorage.removeItem("desk-shared-batches:" + profile.id);
+    } catch { /* Storage cleanup is optional. */ }
+  }, [profile]);
   const [showPassword, setShowPassword] = useState(false);
   const [staffPassword, setStaffPassword] = useState("");
   const staffForm = useRef<HTMLFormElement>(null);
@@ -186,7 +156,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     if (initialFetch.current) { initialFetch.current = false; listener(); }
     return () => { window.removeEventListener("storage", listener); window.clearInterval(timer); };
   }, [refresh, feedback.lock]);
-  useEffect(() => { if (initial?.snapshot) acceptSnapshot(initial.snapshot, initial.profile); }, [initial, acceptSnapshot]);
   useEffect(() => { if (!demo && profile?.role === "security" && !profile.must_change_password) window.location.replace("/security"); }, [profile, demo]);
   useEffect(() => () => clearPreviews(), [clearPreviews]);
   useEffect(() => {
@@ -203,7 +172,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
 
   function save(snapshot: Snapshot) { localStorage.setItem(DEMO_KEY, JSON.stringify(snapshot)); setData(snapshot); }
   async function refreshStatus() {
-    if (uncertain.current) restoredSharingFor.current = null;
     await refresh();
     uncertain.current = false; setNeedsRefresh(false);
   }
@@ -267,7 +235,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       if (!demo) await api("/api/auth/logout", {});
       refreshVersion.current++;
       sessionStorage.removeItem("desk-demo-user"); setProfile(null); setData(empty); setSelectedId(null); clearPreviews(); profileId.current = undefined; setFiles([]); setTokens({}); setUploadOpen(false); setShowPassword(false); setNotice(""); setStaffPassword("");
-      setPhones({}); setSkips({}); setPrepared({}); setSharingErrors({}); setGateLinks({}); setSharingBills([]); setSharedBatches([]); restoredSharingFor.current = null;
+      setPhones({}); setGateLinks({});
       await feedback.finish("success", "Signed out");
     } catch (e) { const message = e instanceof Error ? e.message : "Could not sign out. Please retry."; setNotice(message); await feedback.finish("failure", "Sign-out could not be confirmed", message); }
     finally { refreshVersion.current++; authLock.current = false; setAuthTransition(null); }
@@ -327,16 +295,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   function updateFile(id: string, patch: Partial<UploadFile>) {
     setFiles(current => current.map(f => f.id === id ? { ...f, ...patch } : f));
   }
-  function finishSharingBatch(bills: DeskBill[]) {
-    setSharingBills([]); setSkips({});
-    if (bills.length) setSharedBatches(current => [...current, bills]);
-    try { sessionStorage.removeItem("desk-sharing-batch:" + profile?.id); } catch { /* Optional recovery. */ }
-  }
   function addFiles(incoming: File[]) {
     const { added, errors } = selectFiles(files, incoming);
-    if (added.length && !files.length && sharingBills.length) {
-      finishSharingBatch(sharingBills);
-    }
     const entries = added.map(file => {
       const id = crypto.randomUUID(), localUrl = URL.createObjectURL(file);
       localUrls.current.set(id, localUrl);
@@ -429,15 +389,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       await feedback.finish(failed ? "failure" : "success", failed ? "Some PDFs could not be read" : "PDFs ready for review", failed ? "Review the failed PDFs and retry processing." : undefined);
     } finally { refreshVersion.current++; batchLock.current = false; setBatchBusy(false); }
   }
-  const contactKey = (bill: DeskBill) => profile?.role === "service_advisor" ? customerContactKey(bill) : bill.id;
-  const savedPhoneFor = (bill: DeskBill) => {
-    const batch = [...preview, ...sharingBills].filter(b => customerContactKey(b) === customerContactKey(bill));
-    return savedCustomerPhone(bill, batch.some(b => b.customer_phone) ? batch : data.bills);
-  };
-  const phoneFor = (bill: DeskBill) => phones[contactKey(bill)] ?? (profile?.role === "service_advisor"
-    ? savedPhoneFor(bill) : bill.customer_phone ?? "+91 ");
-  const skipFor = (bill: DeskBill) => Boolean(skips[contactKey(bill)]);
-  const draftGroup = (bill: DeskBill) => [...sharingBills, ...preview].filter(b => customerContactKey(b) === customerContactKey(bill));
+  const phoneFor = (bill: DeskBill) => phones[bill.id] ?? "";
   function reserveWhatsAppTab() {
     try {
       const popup = window.open("about:blank", "_blank");
@@ -465,52 +417,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       } catch (e) { popup?.close(); throw e; }
     }, "Issuing gate pass…", "Gate pass ready", "fullscreen");
   }
-  async function prepareWhatsApp(bill: DeskBill, phone: string, billIds?: string[]) {
-    const result = await api(`/api/bills/${bill.id}/whatsapp`, { customerPhone: phone, billIds });
-    const attachments: BillAttachment[] = result.attachments;
-    let shareFiles: File[] | undefined;
-    // Load files while preparing; sharing itself needs a fresh user click.
-    if (typeof navigator.share === "function" && typeof navigator.canShare === "function" && navigator.canShare({ files: [new File(["%PDF-"], "bill.pdf", { type: "application/pdf" })] })) {
-      const loaded: File[] = new Array(attachments.length);
-      try {
-        await withWorkers(attachments, async attachment => {
-          const file = await boundedRequest(async signal => {
-            const response = await fetch(attachment.url, { signal, cache: "no-store" });
-            if (!response.ok) throw new Error("Could not load the attachment. Use Download PDF or prepare again.");
-            return new File([await response.blob()], attachment.filename, { type: "application/pdf" });
-          });
-          loaded[attachments.indexOf(attachment)] = file;
-        });
-        if (navigator.canShare({ files: loaded })) shareFiles = loaded;
-      } catch {
-        setSharingErrors(current => ({ ...current, [bill.id]: "Device sharing could not load the PDFs. Download them below, or prepare again to retry." }));
-      }
-    }
-    setPrepared(current => ({ ...current, [bill.id]: { url: result.whatsappUrl, phone, message: result.message, billIds: result.billIds, attachments, files: shareFiles } }));
-    setPhones(current => ({ ...current, [contactKey(bill)]: phone }));
-  }
-  function openWhatsApp(bill: DeskBill, billIds?: string[]) {
-    if (demo || feedback.lock.current || batchLock.current || uncertain.current) return;
-    let phone: string;
-    try { phone = customerPhone(phoneFor(bill)); } catch (e) { setNotice((e as Error).message); return; }
-    setSharingErrors(current => ({ ...current, [bill.id]: "" }));
-    void perform(async () => {
-      try {
-        await prepareWhatsApp(bill, phone, billIds);
-        if (!billIds) {
-          const included = customerShareBills(bill, data.bills);
-          setSharedBatches(current => current.some(batch => batch.length === included.length && included.every(b => batch.some(existing => existing.id === b.id))) ? current : [...current, included]);
-        }
-        setSelectedId(null); setUploadOpen(false); focusSharing.current = true;
-        setNotice("PDFs ready to share. Use Share PDFs, or download and attach them in the customer’s WhatsApp chat.");
-        await refreshAfterWrite();
-      } catch (e) {
-        setSharingErrors(current => ({ ...current, [bill.id]: "Bills submitted; PDF preparation failed. " + (e as Error).message }));
-        throw e;
-      }
-    }, "Preparing PDFs for WhatsApp…", "PDFs ready to share", "fullscreen");
-  }
-  async function submit(only?: UploadFile, skipAll = false) {
+  async function submit(only?: UploadFile) {
     if (batchLock.current || feedback.lock.current || uncertain.current || !profile) return;
     setNotice("");
     if (files.some(f => !f.bills.length || f.state === "uploading" || f.state === "reading")) {
@@ -519,32 +426,23 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     const pending = only ? [only] : files.filter(f => f.bills.length && f.state === "ready");
     if (!pending.length) return;
     // Validate the whole batch before any PDF is confirmed, including mixed-customer PDFs.
-    let billTokens: Record<string, string | null>, contacts: ReturnType<typeof billContacts>;
+    let billTokens: Record<string, string | null>;
     try {
       billTokens = Object.fromEntries(preview.map(b => [b.id, tokenNumber(tokens[b.id] ?? b.token_number)]));
       if (requireToken && Object.values(billTokens).some(token => !token)) throw new Error("Token number is required for every bill at this branch");
-      contacts = billContacts(Object.fromEntries(preview.map(b => [b.id, { phone: phoneFor(b), skipWhatsApp: skipAll || skipFor(b) }])));
     } catch (e) { setNotice((e as Error).message); return; }
-    const skippedCustomers = new Set(preview.filter(b => contacts[b.id].skipWhatsApp).map(customerContactKey));
-    const prior = sharingBills.filter(b => !skippedCustomers.has(customerContactKey(b)));
-    const intended = [...prior, ...preview.filter(b => !contacts[b.id].skipWhatsApp)];
-    // Keep only IDs so a reload after partial confirmation can recover this exact batch.
-    try { sessionStorage.setItem("desk-sharing-batch:" + profile.id, JSON.stringify(intended.map(b => b.id))); } catch { /* Optional recovery. */ }
-    const groups = groupCustomers(intended);
-    const single = groups.length === 1 && !skipAll ? groups[0].bills[0] : null;
-    if (!feedback.begin("Submitting bills…", pending.reduce((n, f) => n + f.bills.length, 0), intended.length ? "fullscreen" : "inline")) return;
+    if (!feedback.begin("Submitting bills…", pending.reduce((n, f) => n + f.bills.length, 0), "inline")) return;
     batchLock.current = true; refreshVersion.current++; setBatchBusy(true);
     const submittedBills: DeskBill[] = [];
-    let failed = 0, sharingError = "";
+    let failed = 0;
     const totalBills = pending.reduce((n, f) => n + f.bills.length, 0);
     try {
       await withWorkers(pending, async item => {
         updateFile(item.id, { state: "submitting", error: undefined });
         try {
           const itemTokens = Object.fromEntries(item.bills.map(b => [b.id, billTokens[b.id]]));
-          const itemContacts = Object.fromEntries(item.bills.map(b => [b.id, contacts[b.id]]));
           const now = new Date().toISOString();
-          const submitted = item.bills.map(b => ({ ...b, token_number: billTokens[b.id], customer_phone: contacts[b.id].phone, uploads: { ...b.uploads!, confirmed_at: now } }));
+          const submitted = item.bills.map(b => ({ ...b, token_number: billTokens[b.id], customer_phone: null, uploads: { ...b.uploads!, confirmed_at: now } }));
           if (demo) {
             const snapshot = readDemo();
             if (snapshot.bills.some(b => b.upload_id !== item.uploadId && b.uploads?.confirmed_at && b.uploads.file_hash === item.bills[0].uploads?.file_hash)) throw new Error("This PDF has already been submitted");
@@ -552,10 +450,9 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
               const index = snapshot.bills.findIndex(existing => existing.id === b.id);
               snapshot.bills[index] = { ...b, customer_id: "demo-customer:" + customerKey(b) };
               snapshot.audit.unshift({ id: crypto.randomUUID(), bill_id: b.id, actor_id: profile.id, action: "submitted", created_at: now, detail: { token_number: billTokens[b.id] } });
-              if (contacts[b.id].skipWhatsApp) snapshot.audit.unshift({ id: crypto.randomUUID(), bill_id: b.id, actor_id: profile.id, action: "whatsapp_skipped", created_at: now, detail: {} });
             });
             save(snapshot);
-          } else await api("/api/uploads/" + item.uploadId + "/confirm", { tokens: itemTokens, contacts: itemContacts });
+          } else await api("/api/uploads/" + item.uploadId + "/confirm", { tokens: itemTokens });
           submittedBills.push(...submitted);
           feedback.progress("Submitting bills…", submittedBills.length, totalBills);
           setFiles(current => current.filter(f => f.id !== item.id));
@@ -564,25 +461,11 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       });
       const submittedIds = new Set(submittedBills.map(b => b.id));
       const remaining = preview.filter(b => !submittedIds.has(b.id));
-      // Preserve batch order across parallel confirmations and partial retries.
-      const completed = new Map([...prior, ...submittedBills].map(b => [b.id, b]));
-      const toShare = intended.flatMap(b => completed.has(b.id) ? [completed.get(b.id)!] : []);
-      if (remaining.length) setSharingBills(toShare);
-      else finishSharingBatch(toShare);
-      if (single && !demo && !remaining.some(b => customerContactKey(b) === customerContactKey(single))) {
-        feedback.progress("Preparing PDFs for WhatsApp…");
-        setSharingErrors(current => ({ ...current, [toShare[0].id]: "" }));
-        try { await prepareWhatsApp(toShare[0], customerPhone(phoneFor(single)), toShare.map(b => b.id)); }
-        catch (e) {
-          sharingError = " Bills submitted; PDF preparation failed. " + (e as Error).message + " Use Prepare PDFs to retry.";
-          setSharingErrors(current => ({ ...current, [toShare[0].id]: sharingError }));
-        }
-      }
-      // A failed refresh must not undo successful submission or its sharing queue.
+      // A refresh failure must not turn a confirmed submission into a failed write.
       if (!demo) await refreshAfterWrite();
-      if (!remaining.length) { setUploadOpen(false); setSelectedId(null); focusSharing.current = true; }
-      setNotice(`${pending.length - failed} PDF(s) submitted to cashier. ${failed} failed${failed ? "; retry the remaining PDFs before sharing their customer group." : "."}` + sharingError + (demo ? " Demo customer sharing is disabled." : !sharingError && single && !remaining.length ? " PDFs ready to share below. Choose WhatsApp and the recipient, then press Send." : ""));
-      await feedback.finish(failed || sharingError ? "failure" : "success", failed ? "Some bills were not submitted" : sharingError ? "Bills submitted; PDF preparation failed" : "Bills submitted", failed ? "Successful submissions are saved. Review the failed PDFs before retrying." : sharingError || undefined);
+      if (!remaining.length) { setUploadOpen(false); setSelectedId(null); }
+      setNotice(`${pending.length - failed} PDF(s) submitted to cashier. ${failed ? `${failed} failed; retry the remaining PDFs.` : ""}`);
+      await feedback.finish(failed ? "failure" : "success", failed ? "Some bills were not submitted" : "Bills submitted", failed ? "Successful submissions are saved. Review the failed PDFs before retrying." : undefined);
     } finally { refreshVersion.current++; batchLock.current = false; setBatchBusy(false); }
   }
   function forgetPreview(uploadId: string) {
@@ -604,7 +487,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       }
       forgetPreview(item.uploadId || item.id);
       setFiles(current => current.filter(f => f.id !== item.id));
-      if (files.length === 1) finishSharingBatch(sharingBills);
       if (!demo && item.uploadId) await refreshAfterWrite();
     }, "Deleting draft…", "Draft removed");
   }
@@ -619,7 +501,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       } else { const result = await api("/api/bills/" + bill.id + "/delete", {}); warning = result.warning; }
       forgetPreview(bill.upload_id);
       setFiles(current => current.map(f => f.uploadId === bill.upload_id ? { ...f, localUrl: undefined, bills: f.bills.filter(b => b.id !== bill.id) } : f).filter(f => f.uploadId !== bill.upload_id || f.bills.length));
-      if (files.length === 1 && files[0].bills.length === 1) finishSharingBatch(sharingBills);
       setSelectedId(null); setPdfUrl("");
       if (!demo) await refreshAfterWrite();
       setNotice(warning || "Draft bill deleted.");
@@ -665,52 +546,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     } catch (e) { if (request === pdfRequest.current) { setPdfError(e instanceof Error ? e.message : "PDF could not be loaded"); setPdfLoading(false); } }
   }
 
-  function whatsappFields(bill: DeskBill, draft: boolean, batchBills?: DeskBill[], blocked = false) {
-    const skipped = draft && skipFor(bill);
-    const unfinished = sharingBills.some(b => customerContactKey(b) === customerContactKey(bill)) && preview.some(b => customerContactKey(b) === customerContactKey(bill));
-    blocked = blocked || (!draft && unfinished);
-    const scope = batchBills ?? (draft || unfinished ? draftGroup(bill) : undefined);
-    const previewBill = (b: DeskBill) => ({ ...b, customer_id: b.customer_id || customerKey(b), token_number: tokens[b.id] ?? b.token_number, uploads: { ...b.uploads!, confirmed_at: "preview" } });
-    const included = scope ? customerShareBills(previewBill(bill), scope.map(previewBill))
-      : customerShareBills(bill, data.bills);
-    const billIds = scope?.map(b => b.id);
-    const cached = prepared[bill.id];
-    const link = !blocked && cached?.phone === phoneFor(bill) && cached.billIds.length === included.length && included.every(b => cached.billIds.includes(b.id)) ? cached : undefined;
-    return <div className="sd-whatsapp">
-      <label><span className="sd-whatsapp-label"><WhatsAppIcon/>Customer WhatsApp number</span><input type="tel" autoComplete="off" value={phoneFor(bill)} maxLength={40} disabled={busy || batchBusy || skipped}
-        onChange={e => { setPhones(current => ({ ...current, [contactKey(bill)]: e.target.value })); setPrepared(current => Object.fromEntries(Object.entries(current).filter(([, link]) => !included.some(b => link.billIds.includes(b.id))))); }} placeholder="+91 98765 43210"/></label>
-      <small>One number for this customer’s bills. India defaults to +91. Verify the customer and number before sending.</small>
-      {phoneFor(bill) === "" && savedPhoneFor(bill) === "" && <small>Saved numbers differ. Enter the correct number for this customer.</small>}
-      {draft && <label className="sd-check"><input type="checkbox" checked={skipped} disabled={busy || batchBusy} onChange={e => setSkips(current => ({ ...current, [contactKey(bill)]: e.target.checked }))}/><span className="sd-whatsapp-label is-muted"><WhatsAppIcon/>Submit this customer’s bills without WhatsApp</span></label>}
-      {!skipped && <><small>{included.length} bill{included.length === 1 ? "" : "s"} for this customer as separate PDF attachments. {scope ? "Only this upload batch; older bills are excluded." : "Includes your submitted bills."}</small><details><summary><span className="sd-whatsapp-label"><WhatsAppIcon/>Preview preset message</span></summary><p className="sd-message-preview">{link?.message || whatsappMessage(included.map(bill => ({ bill })), profile?.full_name ?? "")}</p></details></>}
-      {demo && <small>Customer sharing is disabled in this local demo. PDFs stored in this browser cannot be opened by customers.</small>}
-      {blocked && <p role="status">Finish submitting or remove this customer’s remaining PDFs before sharing.</p>}
-      {!draft && <>
-        <div className="sd-actions"><button className="sd-whatsapp-action" disabled={demo || busy || batchBusy || blocked} onClick={() => openWhatsApp(bill, billIds)}><WhatsAppIcon/>{link ? "Prepare again" : "Prepare PDFs"}</button></div>
-        {link && !demo && <AttachmentActions key={link.phone + link.billIds.join(",")} prepared={link} disabled={busy || batchBusy || needsRefresh}/>}
-      </>}
-      {sharingErrors[bill.id] && <p role="alert">{sharingErrors[bill.id]}</p>}
-      {link && <small>PDFs ready to share. Check the recipient and attachments, then press Send in WhatsApp. Delivery is not tracked.</small>}
-    </div>;
-  }
-  function sharingQueue() {
-    const batches = [...sharedBatches, ...(sharingBills.length ? [sharingBills] : [])];
-    if (!batches.length) return null;
-    return <section ref={sharingSection} tabIndex={-1} className="sd-sharing-queue" aria-label="Submitted bills to share"><h3>Submitted to cashier · share with customers</h3><p>One message per customer from each upload batch. You can also share again from My bills.</p>
-      {batches.flatMap((batch, index) => groupCustomers(batch).map(group => {
-        const pending = index === sharedBatches.length ? preview.filter(b => customerContactKey(b) === customerContactKey(group.bills[0])) : [];
-        const blocked = pending.length > 0 || (index === sharedBatches.length && files.some(f => !f.bills.length));
-        return <article key={index + ":" + group.bills[0].id} className="sd-review-card"><strong>{group.name} — {group.bills.length} bill{group.bills.length === 1 ? "" : "s"}</strong>{whatsappFields(group.bills[0], false, [...group.bills, ...pending], blocked)}<button className="sd-plain" disabled={busy || batchBusy || blocked} onClick={() => {
-          const keep = (b: DeskBill) => !group.bills.some(shared => shared.id === b.id);
-          setPrepared(current => Object.fromEntries(Object.entries(current).filter(([, value]) => !value.billIds.some(id => group.bills.some(b => b.id === id)))));
-          setSharingBills(current => current.filter(keep)); setSharedBatches(current => current.map(bills => bills.filter(keep)).filter(bills => bills.length));
-        }}>Dismiss</button></article>;
-      }))}
-    </section>;
-  }
   function submitLabel(items: UploadFile[]) {
-    const groups = groupCustomers(items.flatMap(item => item.bills));
-    return groups.length === 1 ? skipFor(groups[0].bills[0]) ? "Submit without WhatsApp" : demo ? "Submit to cashier" : "Submit & prepare PDFs" : "Submit all";
+    return items.length > 1 ? "Submit all to cashier" : "Submit to cashier";
   }
 
   if (restoring && !profile) return <DeskShell><OperationDialog operation={feedback.operation} onDismiss={feedback.dismiss}/><OperationStatus operation={feedback.operation}/>{refreshError ? <div role="alert"><p>{refreshError}</p><button onClick={() => void perform(refreshStatus)}>Retry workspace</button></div> : undefined}</DeskShell>;
@@ -772,7 +609,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
         </form>{staffPassword && <div className="sd-alert"><strong>Share privately; shown for this session only.</strong><p><code>{staffPassword}</code></p><button onClick={() => setStaffPassword("")}>Dismiss</button></div>}
         <div className="sd-table-wrap"><table><thead><tr><th>Name / User ID</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{data.staff.map(p => <tr key={p.id}><td><strong>{p.full_name}</strong><small>{p.staff_id}</small></td><td>{labels[p.role]}</td><td>{p.active ? "Active" : "Disabled"}{p.must_change_password ? " · Temporary password" : ""}</td><td>{p.id !== profile.id && <div className="sd-actions"><button disabled={busy} onClick={() => void action({ action: "reset_staff", target: p.id })}>Reset password</button><button disabled={busy} onClick={() => void action({ action: "toggle_staff", target: p.id, active: !p.active })}>{p.active ? "Disable" : "Enable"}</button>{p.staff_id !== "admin01" && <button className="sd-danger" disabled={busy} onClick={() => { if (window.confirm(`Permanently delete ${p.full_name} (${p.staff_id})? Their account and access will be removed. Bill and collection history will be retained.`)) void action({ action: "delete_staff", target: p.id }); }}><Trash2 size={16}/>Delete account</button>}</div>}</td></tr>)}</tbody></table></div>
       </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
-        {profile.role === "service_advisor" && <><div className="sd-upload-launch"><button className="sd-primary" onClick={() => setUploadOpen(true)}><Upload size={18}/>Upload bills{files.length ? ` (${files.length})` : ""}</button></div>{!uploadOpen && sharingQueue()}</>}
+        {profile.role === "service_advisor" && <><div className="sd-upload-launch"><button className="sd-primary" onClick={() => setUploadOpen(true)}><Upload size={18}/>Upload bills{files.length ? ` (${files.length})` : ""}</button></div></>}
         {daily && tab === "overview" && <section aria-label="Daily analytics">
           <div className="sd-filters"><label>Analytics date<input type="date" value={analyticsDay} onChange={e => setAnalyticsDay(e.target.value || indiaDate())}/></label><button className="sd-plain" onClick={() => setAnalyticsDay(indiaDate())}>Today</button><small>By invoice date · current payment status · INR</small></div>
           <div className="sd-metrics sd-daily-metrics" aria-live="polite">
@@ -796,7 +633,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
         </section>
       </>}
     </main>
-    {uploadOpen && <UploadDialog onClose={() => { if (!batchLock.current && !feedback.lock.current) setUploadOpen(false); }} footer={<div className="sd-actions sd-upload-footer"><button className="sd-secondary" disabled={batchBusy || busy || needsRefresh || !files.some(f => !f.bills.length && (f.state === "selected" || f.state === "failed") && (f.file || f.stored))} onClick={() => void uploadFiles()}>Upload &amp; read all</button><button className="sd-primary" disabled={batchBusy || busy || needsRefresh || !files.some(f => f.state === "ready")} onClick={() => void submit()}>{submitLabel(files.filter(f => f.state === "ready"))}</button><button disabled={batchBusy || busy || needsRefresh || !files.some(f => f.state === "ready")} onClick={() => void submit(undefined, true)}><WhatsAppIcon/>Submit all without WhatsApp</button>{needsRefresh && <button onClick={() => void perform(refreshStatus)}>Refresh status</button>}<OperationStatus operation={feedback.operation}/></div>}>
+    {uploadOpen && <UploadDialog onClose={() => { if (!batchLock.current && !feedback.lock.current) setUploadOpen(false); }} footer={<div className="sd-actions sd-upload-footer"><button className="sd-secondary" disabled={batchBusy || busy || needsRefresh || !files.some(f => !f.bills.length && (f.state === "selected" || f.state === "failed") && (f.file || f.stored))} onClick={() => void uploadFiles()}>Upload &amp; read all</button><button className="sd-primary" disabled={batchBusy || busy || needsRefresh || !files.some(f => f.state === "ready")} onClick={() => void submit()}>{submitLabel(files.filter(f => f.state === "ready"))}</button>{needsRefresh && <button onClick={() => void perform(refreshStatus)}>Refresh status</button>}<OperationStatus operation={feedback.operation}/></div>}>
       <header className="sd-upload-heading"><div><p>Review each bill, then submit to the cashier. Up to 10 PDFs · 10 MB each.</p></div>
         <label className="sd-upload-button"><Upload size={20}/>Add PDFs<input aria-label="Add PDFs" type="file" accept=".pdf,application/pdf" multiple disabled={batchBusy || busy} onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }}/></label>
       </header>
@@ -814,7 +651,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       </section>)}</div>
       <div className="sd-customer-review">{groupCustomers(preview).map(group => <section className="sd-customer-group" key={group.id} aria-label={`Review ${group.name}`}>
         <h3>{group.name}</h3><p>{group.reference ? `Customer ID ${group.reference} · ` : ""}{group.bills.length} bill{group.bills.length === 1 ? "" : "s"} · {[...new Set(group.bills.map(b => b.vehicle_no_display).filter(Boolean))].join(", ")}</p>
-        {whatsappFields(group.bills[0], true)}
         {group.bills.map(b => <article className="sd-review-card" key={b.id}>
           <div className="sd-review-meta"><span className="sd-bill-type">{billType(b)}</span><small>{b.uploads?.original_filename} · Pages {b.page_from}–{b.page_to}</small></div>
           <div className="sd-review-heading"><div><small>Invoice</small><h3 className="sd-review-reference">{b.invoice_reference || "Invoice number not read"}</h3></div><div className="sd-review-amount"><small>Bill amount</small><strong>{billAmount(b)}</strong></div></div>
@@ -827,7 +663,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
         </article>)}
       </section>)}</div>
       {!files.length && <p>No PDFs selected. Uploaded drafts are restored here after a reload.</p>}
-      {sharingQueue()}
 
       {notice && <p role="status" className="sd-notice">{notice.includes("WhatsApp") && <WhatsAppIcon/>}{notice}</p>}
     </UploadDialog>}
@@ -839,14 +674,13 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       <div className="sd-extraction"><strong>Read directly from PDF</strong><p>{selected.amount_evidence || "No readable total found"}</p>{selected.field_confidence?.document?.typeEvidence && <p>{selected.field_confidence.document.typeEvidence}</p>}<small>{isSupportingNote(selected) ? "Supporting service note. No monetary total is stated; this document is retained with the customer’s bills and excluded from financial totals." : "Financial values cannot be entered or edited manually."}</small></div>
       {selected.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
       {profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <label>Token number ({requireToken ? "required" : "optional"})<input required={requireToken} value={tokens[selected.id] ?? selected.token_number ?? ""} onChange={e => setTokens(current => ({ ...current, [selected.id]: e.target.value }))} maxLength={30} placeholder="Enter token from your token machine" disabled={batchBusy || busy}/></label>}
-      {profile.role === "service_advisor" && selected.uploaded_by === profile.id && whatsappFields(selected, !selected.uploads?.confirmed_at)}
       <div className="sd-actions"><button className="sd-secondary" disabled={pdfLoading} onClick={() => void openPdf(selected)}><FileText size={16}/>View original PDF</button>
-        {profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <button className="sd-primary" disabled={busy || batchBusy} onClick={() => void submit()}>{submitLabel(files.filter(f => f.state === "ready")).includes("WhatsApp") && <WhatsAppIcon/>}{submitLabel(files.filter(f => f.state === "ready"))}</button>}
+        {profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <button className="sd-primary" disabled={busy || batchBusy} onClick={() => void submit()}>{submitLabel(files.filter(f => f.state === "ready"))}</button>}
         {profile.role === "service_advisor" && selected.uploaded_by === profile.id && !selected.uploads?.confirmed_at && selected.approval_status === "pending" && <button className="sd-danger" disabled={busy || batchBusy} onClick={() => void deleteBill(selected)}><Trash2 size={16}/>Delete bill</button>}
         {!demo && profile.role === "super_admin" && selected.approval_status === "pending" && selected.amount_paise === null && !isSupportingNote(selected) && <button disabled={busy} onClick={() => void action({action:"reextract",target:selected.id})}>Re-read original PDF</button>}
       </div>
       {profile.role === "cashier" && selected.uploads?.confirmed_at && !isSupportingNote(selected) && !isPaid(selected,data.payments) && <PaymentForm key={selected.id} bill={selected} busy={busy} onConfirm={(method, otherMethod, transactionId) => void action({ action: "collect", target: selected.id, method, otherMethod, transactionId })}/>}
-      {profile.role === "cashier" && selected.uploads?.confirmed_at && (isPaid(selected, data.payments) || isSupportingNote(selected)) && <section className="sd-related"><h3>Vehicle gate pass</h3><p>All submitted bills for this customer and vehicle must be cleared.</p><label><span className="sd-whatsapp-label"><WhatsAppIcon/>Customer WhatsApp number</span><input type="tel" autoComplete="tel" maxLength={40} disabled={busy} value={phoneFor(selected)} onChange={e => { setPhones(current => ({ ...current, [selected.id]: e.target.value })); setGateLinks(current => ({ ...current, [selected.id]: "" })); }}/></label><div className="sd-actions"><button className="sd-primary" disabled={demo || busy} onClick={() => issueGatePass(selected)}><WhatsAppIcon/>Issue gate pass</button>{gateLinks[selected.id] && <a className="sd-whatsapp-action" href={gateLinks[selected.id]} target="_blank" rel="noreferrer" aria-label="Open gate pass in WhatsApp"><WhatsAppIcon/></a>}</div></section>}
+      {profile.role === "cashier" && selected.uploads?.confirmed_at && (isPaid(selected, data.payments) || isSupportingNote(selected)) && <section className="sd-related"><h3>Vehicle gate pass</h3><p>All submitted bills for this customer and vehicle must be cleared.</p><label><span className="sd-whatsapp-label"><WhatsAppIcon/>Customer WhatsApp number</span><input type="tel" autoComplete="off" placeholder="Enter customer WhatsApp number" maxLength={40} disabled={busy} value={phoneFor(selected)} onChange={e => { setPhones(current => ({ ...current, [selected.id]: e.target.value })); setGateLinks(current => ({ ...current, [selected.id]: "" })); }}/></label><div className="sd-actions"><button className="sd-primary" disabled={demo || busy} onClick={() => issueGatePass(selected)}><WhatsAppIcon/>Issue gate pass</button>{gateLinks[selected.id] && <a className="sd-whatsapp-action" href={gateLinks[selected.id]} target="_blank" rel="noreferrer" aria-label="Open gate pass in WhatsApp"><WhatsAppIcon/></a>}</div></section>}
       <h3>Full-bill collection history</h3>{data.payments.filter(p => p.bill_id === selected.id && !p.is_archived).map(p => <div className="sd-payment" key={p.id}><div><strong>{money(p.amount_paise)}</strong><small>{dateTime(p.occurred_at)} · {person(p.recorded_by)} · {p.method} · {p.source !== "reversal" ? "Full bill collected" : "Full collection reversed"}</small>{p.transaction_id && <small>{paymentReferenceLabel(p.method) || "Transaction ID"}: {p.transaction_id}</small>}{p.reason && <p>{p.reason}</p>}</div>{profile.role === "super_admin" && p.source !== "reversal" && !data.payments.some(r => r.reversal_of === p.id) && <button disabled={busy} onClick={() => { const reason = window.prompt("Why is this payment entry incorrect? This is a correction, not a customer refund."); if (reason) void action({ action: "reverse", target: p.id, reason }); }}>Reverse entry</button>}</div>)}
       {!isSupportingNote(selected) && !data.payments.some(p => p.bill_id === selected.id && !p.is_archived) && <p className="sd-muted">No collection recorded. An invoice alone does not confirm payment.</p>}
       {selectedGroup && <section className="sd-related"><h3>This customer’s bills</h3><p>{selectedGroup.name}{selectedGroup.reference ? " · Customer ID " + selectedGroup.reference : ""}</p><strong>{selectedGroup.bills.length} bill{selectedGroup.bills.length === 1 ? "" : "s"} · {selectedGroup.bills.some(b => b.amount_paise !== null) ? money(selectedGroup.total) + " stated invoice value" : "No monetary total stated"}{selectedGroup.missingAmounts > 0 ? " (some totals unread)" : ""}</strong><small>All accessible bills, including those awaiting approval.</small>{selectedGroup.bills.map(b => <button key={b.id} aria-current={b.id === selected.id ? "true" : undefined} onClick={() => { selectBill(b.id); }}><span>{b.invoice_reference || "Invoice not read"}<small>{billType(b)}</small><small>{b.invoice_date || "Date not read"} · {b.vehicle_no_display || "Vehicle not read"}</small></span><strong>{billAmount(b)}</strong><ChevronRight size={15}/></button>)}</section>}
@@ -890,34 +724,4 @@ function PaymentForm({ bill, busy, onConfirm }: { bill: DeskBill; busy: boolean;
     {referenceLabel && <label>{referenceLabel} (required)<input required maxLength={100} value={transactionId} disabled={busy} onChange={e => setTransactionId(e.target.value)} placeholder={"Enter " + referenceLabel.toLowerCase()}/></label>}
     <button className="sd-primary" disabled={busy || !method || Boolean(referenceLabel && !transactionId.trim()) || (method === "Other" && !otherMethod.trim()) || bill.amount_paise === null || !bill.invoice_date || !bill.invoice_reference?.trim()}>Mark as paid · {money(bill.amount_paise)} <Check size={16}/></button>
   </form>;
-}
-
-function AttachmentActions({ prepared, disabled }: { prepared: { url: string; message: string; attachments: BillAttachment[]; files?: File[] }; disabled: boolean }) {
-  const lock = useRef(false);
-  const [sharing, setSharing] = useState(false);
-  const [status, setStatus] = useState("");
-  async function share() {
-    if (disabled || lock.current || !prepared.files) return;
-    lock.current = true; setSharing(true); setStatus("");
-    try {
-      // Files only: messaging apps vary in how they handle text alongside PDFs.
-      await navigator.share({ files: prepared.files });
-      setStatus("Files handed to the share menu. Delivery is not tracked.");
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) setStatus("Sharing is unavailable. Download the PDFs and attach them in WhatsApp.");
-    } finally { lock.current = false; setSharing(false); }
-  }
-  return <div className="sd-attachments">
-    <p>{prepared.files ? "Share PDFs, then choose WhatsApp and the customer. You can copy the message separately." : "Download each PDF below. Open the customer chat, attach the downloaded files, and press Send."}</p>
-    <div className="sd-actions">
-      {prepared.files && <button className="sd-whatsapp-action" disabled={disabled || sharing} onClick={() => void share()}><WhatsAppIcon/>{sharing ? "Sharing…" : "Share PDFs"}</button>}
-      <button disabled={disabled || sharing} onClick={() => {
-        if (!navigator.clipboard) { setStatus("Copy the text from Preview preset message above."); return; }
-        void navigator.clipboard.writeText(prepared.message).then(() => setStatus("Message copied."), () => setStatus("Copy the text from Preview preset message above."));
-      }}>Copy message</button>
-      <a className="sd-whatsapp-action" href={prepared.url} target="_blank" rel="noreferrer" aria-disabled={disabled || sharing} onClick={event => { if (disabled || sharing) event.preventDefault(); }}><WhatsAppIcon/>Open customer chat</a>
-    </div>
-    <ul>{prepared.attachments.map((attachment, index) => <li key={attachment.billId}><a href={attachment.url} download={attachment.filename} aria-disabled={disabled || sharing} onClick={event => { if (disabled || sharing) event.preventDefault(); }}>Download PDF {index + 1}</a> <small>{attachment.filename}</small></li>)}</ul>
-    {status && <p role="status">{status}</p>}
-  </div>;
 }
