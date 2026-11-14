@@ -9,7 +9,7 @@ import type { ExtractedBill } from "@/lib/pdf/extract";
 import { importReferenceBills, isBuiltInSample } from "@/lib/import-reference-bills";
 import { DeskShell } from "./desk-shell";
 import { Brand, ToyotaEmblem } from "./desk-brand";
-import { fileIdentity, selectFiles, restoreDrafts, withTwoWorkers, type UploadFile } from "@/lib/upload-queue";
+import { fileIdentity, selectFiles, restoreDrafts, withWorkers, type UploadFile } from "@/lib/upload-queue";
 import { PdfLinks } from "@/lib/pdf-preview";
 import { billContacts, customerContactKey, customerPhone, customerShareBills, savedCustomerPhone, whatsappMessage } from "@/lib/whatsapp";
 import { readApiResponse } from "@/lib/api-response";
@@ -345,20 +345,20 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     setFiles(current => [...current, ...entries]);
     setNotice(errors.join(" "));
   }
-  async function upload(item: UploadFile): Promise<DeskBill[]> {
+  async function upload(item: UploadFile, report: (patch: Partial<UploadFile>) => void): Promise<DeskBill[]> {
     if (!profile) throw new Error("Staff login required");
     const file = item.file;
-    updateFile(item.id, { state: "uploading", error: undefined });
+    report({ state: "uploading", progress: 0, error: undefined });
     if (demo) {
       if (!file) throw new Error("Reselect the original PDF.");
       const form = new FormData(); form.set("file", file);
-      updateFile(item.id, { state: "reading", progress: 70 });
+      report({ state: "reading", progress: 0 });
       const result = await requestJson("/api/demo/extract", { method: "POST", body: form }, false);
       const snapshot = readDemo();
       if (snapshot.bills.some(b => b.uploads?.file_hash === result.hash && b.uploads?.confirmed_at)) throw new Error("This PDF has already been submitted");
       const uploadId = item.uploadId || crypto.randomUUID();
       await demoPdf(uploadId, file);
-      updateFile(item.id, { uploadId, stored: true });
+      report({ uploadId, stored: true });
       if (item.localUrl) localUrls.current.set(uploadId, item.localUrl);
       const bills: DeskBill[] = result.bills.map((b: ExtractedBill) => ({
         id: crypto.randomUUID(), upload_id: uploadId, customer_name: b.customerName, vehicle_no_display: b.vehicleNo, vin: b.vin,
@@ -378,11 +378,11 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       if (!file) throw new Error("Reselect the original PDF to finish uploading.");
       const init = await api("/api/uploads/init", { uploadId, filename: file.name, size: file.size, type: "application/pdf" });
       uploadId = init.uploadId;
-      updateFile(item.id, { uploadId, signedUrl: init.signedUrl });
+      report({ uploadId, signedUrl: init.signedUrl });
       try { await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open("PUT", init.signedUrl); xhr.setRequestHeader("Content-Type", "application/pdf");
-        xhr.upload.onprogress = event => { if (event.lengthComputable) updateFile(item.id, { progress: Math.round(event.loaded / event.total * 70) }); };
+        xhr.upload.onprogress = event => { if (event.lengthComputable) report({ progress: Math.round(event.loaded / event.total * 100) }); };
         xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error("PDF upload failed. Retry this file."));
         xhr.onerror = () => reject(new Error("PDF upload failed. Check your connection and retry."));
         xhr.timeout = 120_000; xhr.ontimeout = () => reject(new Error("PDF upload timed out. Retry this file."));
@@ -390,16 +390,17 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       }); } catch (transferError) {
         // Check storage through processing before asking the user to transfer again.
         try {
+          report({ state: "reading" });
           const result = await api("/api/uploads/" + uploadId + "/process", {});
-          updateFile(item.id, { stored: true });
+          report({ stored: true });
           if (item.localUrl && uploadId) localUrls.current.set(uploadId, item.localUrl);
           return result.bills;
         } catch { throw transferError; }
       }
-      updateFile(item.id, { stored: true });
+      report({ stored: true });
     }
     if (item.localUrl && uploadId) localUrls.current.set(uploadId, item.localUrl);
-    updateFile(item.id, { state: "reading", progress: 80 });
+    report({ state: "reading", progress: 100 });
     const result = await api("/api/uploads/" + uploadId + "/process", {});
     return result.bills;
   }
@@ -408,13 +409,22 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     const pending = only ? [only] : files.filter(f => !f.bills.length && (f.state === "selected" || f.state === "failed"));
     if (!pending.length || !feedback.begin("Uploading and reading PDFs…", pending.length)) return;
     batchLock.current = true; refreshVersion.current++; setBatchBusy(true); setNotice("");
-    let failed = 0, completed = 0;
+    let failed = 0;
+    // Each PDF has one progress entry; concurrent workers never overwrite one another.
+    const statuses = pending.map(item => ({ id: item.id, name: item.name, state: "selected" as UploadFile["state"], progress: 0 }));
+    const reportBatch = () => feedback.progress("Uploading and reading PDFs…", statuses.filter(item => item.state === "ready").length, pending.length, [...statuses]);
+    reportBatch();
     try {
-      await withTwoWorkers(pending, async item => {
-        try { updateFile(item.id, { bills: await upload(item), state: "ready", progress: 100, error: undefined }); }
-        catch (e) { failed++; updateFile(item.id, { state: "failed", error: e instanceof Error ? e.message : "Upload failed. Retry this file." }); }
-        finally { feedback.progress("Uploading and reading PDFs…", ++completed, pending.length); }
-      });
+      await withWorkers(pending, async item => {
+        const report = (patch: Partial<UploadFile>) => {
+          updateFile(item.id, patch);
+          const index = statuses.findIndex(entry => entry.id === item.id);
+          statuses[index] = { ...statuses[index], state: patch.state ?? statuses[index].state, progress: patch.progress ?? statuses[index].progress };
+          reportBatch();
+        };
+        try { report({ bills: await upload(item, report), state: "ready", progress: 100, error: undefined }); }
+        catch (e) { failed++; report({ state: "failed", error: e instanceof Error ? e.message : "Upload failed. Retry this file." }); }
+      }, demo ? 2 : 4);
       setNotice(`${pending.length - failed} PDF(s) ready for review. ${failed} failed.`);
       await feedback.finish(failed ? "failure" : "success", failed ? "Some PDFs could not be read" : "PDFs ready for review", failed ? "Review the failed PDFs and retry processing." : undefined);
     } finally { refreshVersion.current++; batchLock.current = false; setBatchBusy(false); }
@@ -514,7 +524,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     let failed = 0, sharingError = "";
     const totalBills = pending.reduce((n, f) => n + f.bills.length, 0);
     try {
-      await withTwoWorkers(pending, async item => {
+      await withWorkers(pending, async item => {
         updateFile(item.id, { state: "submitting", error: undefined });
         try {
           const itemTokens = Object.fromEntries(item.bills.map(b => [b.id, billTokens[b.id]]));
@@ -778,7 +788,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       <p className="sd-upload-summary" role="status">{files.filter(f => f.state === "ready").length} ready · {files.filter(f => f.error).length} failed · {files.length} / 10 PDFs</p>
       <div className="sd-upload-queue">{files.map(f => <section className={"sd-queue-item" + (f.error ? " has-error" : "")} key={f.id}>
         <div className="sd-upload-file"><FileText size={19} aria-hidden="true"/><span><strong>{f.name}</strong><small>{({ selected: "Ready to upload", uploading: "Uploading…", reading: "Reading bill details…", ready: "Ready for review", failed: "Failed", submitting: "Submitting…" })[f.state]}</small></span><button disabled={batchBusy || busy} aria-label={"Remove " + f.name} onClick={() => void removeFile(f)}><X size={16}/></button></div>
-        {(f.state === "uploading" || f.state === "reading") && <progress aria-label={"Progress for " + f.name} max={100} value={f.progress}/>}
+        {f.state === "uploading" && <><progress aria-label={"Uploading " + f.name} max={100} value={f.progress}/><small>{f.progress}% uploaded</small></>}
+        {f.state === "reading" && <progress aria-label={"Reading " + f.name}/> }
         {f.error && <p className="sd-warning" role="alert">{f.error}</p>}
         <div className="sd-actions">
           {f.localUrl && !f.bills.length && <a href={f.localUrl + "#page=1"} target="_blank" rel="noreferrer">View PDF</a>}

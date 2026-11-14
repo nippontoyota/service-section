@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { selectFiles, fileIdentity, restoreDrafts, withTwoWorkers, type UploadFile } from "./upload-queue";
+import { selectFiles, fileIdentity, restoreDrafts, withWorkers, type UploadFile } from "./upload-queue";
 import { PdfLinks } from "./pdf-preview";
 import { cashierView } from "./desk";
 import { fixtureSnapshot } from "./test-fixtures";
@@ -15,15 +15,15 @@ test("picker appends across openings, deduplicates, and enforces total count and
   assert.equal(selectFiles([], [file("empty.pdf", 0), file("huge.pdf", 10 * 1024 * 1024 + 1), file("text.txt")]).errors.length, 3);
   assert.equal(selectFiles([], [file("limit.pdf", 10 * 1024 * 1024)]).added.length, 1);
 });
-test("workers cap concurrency at two and retain ordered successes after a failure", async () => {
+for (const concurrency of [2, 4]) test(`workers cap concurrency at ${concurrency} and retain ordered successes after a failure`, async () => {
   let active = 0, max = 0;
   const results: string[] = [], failures: number[] = [];
-  await withTwoWorkers([0,1,2,3], async index => {
+  await withWorkers([0,1,2,3], async index => {
     active++; max = Math.max(max, active);
     try { await new Promise(resolve => setTimeout(resolve, index === 0 ? 30 : 5)); if (index === 2) throw new Error("read failed"); results[index] = `bill-${index}`; }
     catch { failures.push(index); } finally { active--; }
-  });
-  assert.equal(max, 2); assert.deepEqual(results.filter(Boolean), ["bill-0", "bill-1", "bill-3"]); assert.deepEqual(failures, [2]);
+  }, concurrency);
+  assert.equal(max, concurrency); assert.deepEqual(results.filter(Boolean), ["bill-0", "bill-1", "bill-3"]); assert.deepEqual(failures, [2]);
 });
 test("draft recovery groups multiple bills in original page order and retains failed upload IDs", () => {
   const snapshot = fixtureSnapshot();

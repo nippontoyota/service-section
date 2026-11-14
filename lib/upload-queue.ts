@@ -26,8 +26,8 @@ export function restoreDrafts(snapshot: Snapshot): UploadFile[] {
     bills: d.status === "review" ? [...d.bills].sort((a,b) => a.page_from - b.page_from).map(b => ({ ...b, uploads: { ...b.uploads, original_filename: d.original_filename, confirmed_at: null } })) : [],
   }));
 }
-export async function withTwoWorkers<T>(items: T[], task: (item: T) => Promise<void>) {
+export async function withWorkers<T>(items: T[], task: (item: T) => Promise<void>, concurrency = 2) {
   let next = 0;
   async function worker() { while (next < items.length) await task(items[next++]); }
-  await Promise.all([worker(), worker()]);
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
 }

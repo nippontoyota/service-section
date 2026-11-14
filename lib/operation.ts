@@ -1,3 +1,4 @@
+import type { UploadFile } from "./upload-queue";
 import { readApiResponse } from "./api-response";
 
 // Client-only feedback; these outcomes never change API or database contracts.
@@ -7,6 +8,7 @@ export type OperationState = {
   detail?: string;
   completed?: number;
   total?: number;
+  files?: Pick<UploadFile, "id" | "name" | "state" | "progress">[];
 };
 
 export class RequestTimeoutError extends Error {

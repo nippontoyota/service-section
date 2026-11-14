@@ -14,8 +14,8 @@ export function useOperation() {
     setOperation({ outcome: "pending", text, ...(total === undefined ? {} : { completed: 0, total }) });
     return true;
   }
-  function progress(text: string, completed?: number, total?: number) {
-    setOperation({ outcome: "pending", text, completed, total });
+  function progress(text: string, completed?: number, total?: number, files?: OperationState["files"]) {
+    setOperation({ outcome: "pending", text, completed, total, files });
   }
   async function finish(outcome: "success" | "failure", text: string, detail?: string) {
     setOperation({ outcome, text, detail });
@@ -53,7 +53,7 @@ export function OperationDialog({ operation, onDismiss }: { operation: Operation
     const timer = setTimeout(() => setSlow(outcome === "pending"), 15_000);
     return () => { clearTimeout(timer); setSlow(false); };
   }, [outcome]);
-  return <dialog ref={dialog} tabIndex={-1} onKeyDown={event => { if (event.key === "Tab" && outcome !== "failure") { event.preventDefault(); dialog.current?.focus(); } }} className="sd-auth-transition sd-operation" data-outcome={outcome} aria-labelledby={title}
+  return <dialog ref={dialog} tabIndex={-1} onKeyDown={event => { if (event.key === "Tab" && outcome !== "failure") { event.preventDefault(); (dialog.current?.querySelector<HTMLElement>(".sd-operation-files") ?? dialog.current)?.focus(); } }} className="sd-auth-transition sd-operation" data-outcome={outcome} aria-labelledby={title}
     onCancel={event => { event.preventDefault(); if (outcome === "failure") onDismiss?.(); }}>
     <div className="sd-auth-content">
       <ToyotaEmblem/>
@@ -61,10 +61,19 @@ export function OperationDialog({ operation, onDismiss }: { operation: Operation
         {outcome === "success" && <Check className="sd-operation-tick" size={44} aria-hidden="true"/>}
         {outcome === "failure" && <CircleAlert size={36} aria-hidden="true"/>}
         <h1 id={title}>{operation?.text}</h1>
-        {operation?.total !== undefined && <p>{operation.completed} / {operation.total} completed</p>}
+        {operation?.total !== undefined && <div className="sd-operation-progress">
+          <strong>{Math.floor((operation.completed ?? 0) / Math.max(1, operation.total) * 100)}%</strong>
+          <progress aria-label={operation.files ? "PDFs ready for review" : "Operation progress"} max={operation.total || 1} value={operation.completed ?? 0}/>
+          <p>{operation.completed} / {operation.total} {operation.files ? "PDFs ready for review" : "completed"}</p>
+        </div>}
         {operation?.detail && <p>{operation.detail}</p>}
         {slow && outcome === "pending" && <p>Still processing… Keep this window open. We’ll show the result when the request finishes.</p>}
       </div>
+      {operation?.files && <ul className="sd-operation-files" tabIndex={0} aria-label="PDF processing status">{operation.files.map(file => <li key={file.id}>
+        <span>{file.name}</span>
+        <small>{({ selected: "Waiting…", uploading: `Uploading · ${file.progress}%`, reading: "Reading bill details…", ready: "Ready for review", failed: "Failed · retry after processing", submitting: "Submitting…" })[file.state]}</small>
+        {file.state === "uploading" && <progress aria-label={"Uploading " + file.name} max={100} value={file.progress}/>}
+      </li>)}</ul>}
       {outcome === "failure" && <button autoFocus className="sd-secondary" onClick={onDismiss}>Continue</button>}
       <span className="sd-auth-caption">NIPPON TOYOTA · SERVICE WORKSPACE</span>
     </div>
