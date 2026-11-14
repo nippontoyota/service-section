@@ -295,7 +295,10 @@
 .sd-message-preview{white-space:pre-wrap;overflow-wrap:anywhere;padding:14px;background:var(--sd-bg);border-radius:8px;font-size:13px;line-height:1.6}
 .sd-sharing-queue{padding:20px;margin:20px 0;border:1px solid var(--sd-line);border-radius:12px;background:#fff}
 .sd-sharing-queue>p{font-size:13px;color:var(--sd-muted)}
-.sd-whatsapp a{font-size:13px;text-decoration:underline}
+.sd-whatsapp .sd-whatsapp-action{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:10px;border:0;border-radius:50%;background:#128c4a;color:#fff;text-decoration:none;flex-shrink:0}
+.sd-whatsapp .sd-whatsapp-action:hover:not(:disabled){background:#0c703b}
+.sd-whatsapp .sd-whatsapp-action:focus-visible{outline:3px solid #128c4a;outline-offset:3px}
+.sd-whatsapp .sd-whatsapp-action svg{width:24px;height:24px}
 .sd-review-card+.sd-review-card{border-top:1px solid var(--sd-line);margin-top:16px}
 .sd-review-meta{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
 .sd-review-meta>small{flex-shrink:0;background:var(--sd-subtle);padding:2px 7px;border-radius:4px;font-size:10px}
@@ -312,7 +315,7 @@
 .sd-review-fields dd{margin:4px 0 0;font-size:12px;font-weight:600;overflow-wrap:anywhere}
 .sd-review-evidence{margin-top:10px;font-size:11px!important}
 .sd-review-card .sd-actions{margin-top:16px;padding-top:14px;border-top:1px solid var(--sd-line)}
-.sd-review-card .sd-actions button:first-child{background:var(--sd-accent-wash);border-color:transparent;color:var(--sd-accent-ink)}
+.sd-review-card .sd-actions button:first-child:not(.sd-whatsapp-action){background:var(--sd-accent-wash);border-color:transparent;color:var(--sd-accent-ink)}
 .sd-queue-item{padding:18px;border:1px solid var(--sd-line);border-radius:12px;min-width:0;background:white;box-shadow:0 2px 4px #20212404}
 .sd-queue-item.has-error{border-color:#e6c58d}
 .sd-queue-item>.sd-actions:empty{display:none}

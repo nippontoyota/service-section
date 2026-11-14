@@ -174,6 +174,10 @@ try {
   await click("Open WhatsApp");
   const fallback = page.getByRole("link", { name: "Open WhatsApp", exact: true });
   await fallback.waitFor();
+  assert.equal(await fallback.innerText(), "", "WhatsApp action uses an icon with an accessible name");
+  assert.equal(await fallback.locator("svg").count(), 1);
+  assert.equal(await page.getByRole("button", { name: "Prepare fresh WhatsApp message" }).count(), 0);
+  assert.equal(await page.locator(".sd-whatsapp textarea, .sd-whatsapp [contenteditable=true]").count(), 0, "The preset stays read-only");
   assert.equal(confirms, 1); assert.equal(preparations, 1); assert.equal(storageUploads, 1);
   const whatsapp = new URL(await fallback.getAttribute("href"));
   assert.equal(whatsapp.pathname, "/919876543210");
@@ -339,6 +343,19 @@ try {
   await groupTab.close();
   assert.equal(preparations, beforeGroup + 2); assert.equal(confirms, 3);
   assert.equal(await page.locator(".sd-message-preview").innerText(), groupMessage);
+  const reopen = context.waitForEvent("page"); await fallback.click();
+  const reopenedTab = await reopen; await reopenedTab.waitForURL("https://wa.me/**");
+  assert.equal(new URL(reopenedTab.url()).searchParams.get("text"), groupMessage);
+  assert.equal(preparations, beforeGroup + 2, "Reopening reuses the ready preset");
+  await reopenedTab.close();
+  // Expired messages refresh from the same icon without an extra advisor action.
+  await page.evaluate(() => { const now = Date.now(); Date.now = () => now + 8 * 86400000; });
+  const renewal = context.waitForEvent("page"); await fallback.click();
+  const renewedTab = await renewal; await renewedTab.waitForURL("https://wa.me/**");
+  assert.equal(preparations, beforeGroup + 4);
+  assert.notEqual(new URL(renewedTab.url()).searchParams.get("text"), groupMessage);
+  await renewedTab.close();
+  await page.screenshot({ path: "/tmp/billdesk-whatsapp-icon.png", fullPage: true });
   assert.deepEqual(errors, []);
   console.log("WhatsApp passed: short hashed links, anonymous GET/HEAD, streaming >4.5 MB, no storage leaks, safe failures, customer-group headings and links, matching preview, private page ranges, draft/owner/customer isolation, all-links-or-error, authorization, tokens, retries, expiry, popup fallback and intercepted handoff.");
 } catch (error) { console.error(appLogs); await page.screenshot({ path: "/tmp/billdesk-whatsapp-failure.png", fullPage: true }).catch(() => {}); throw error; }

@@ -20,6 +20,13 @@ const dateTime = (date: string) => new Date(date).toLocaleString("en-IN", { time
 const empty: Snapshot = { bills: [], payments: [], staff: [], audit: [], as_of: "" };
 type ActionBody = { action: string; target?: string; reason?: string; [key: string]: unknown };
 
+function WhatsAppIcon() {
+  return <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
+    <path d="M8.3 6.7c-.3-.7-.6-.7-.9-.7h-.7c-.3 0-.6.1-.9.4s-1.2 1.2-1.2 2.8 1.2 3.2 1.4 3.4 2.4 3.7 5.9 5.1c2.9 1.1 3.5.9 4.2.8s2.1-.9 2.4-1.7.3-1.5.2-1.7-.3-.3-.7-.5l-2.4-1.1c-.3-.1-.6-.2-.8.2l-1.1 1.3c-.2.2-.4.3-.8.1s-1.5-.5-2.9-1.8c-1.1-1-1.8-2.1-2-2.5s0-.5.2-.7l.5-.6.3-.5c.1-.2 0-.4 0-.6Z" fill="currentColor" transform="translate(3 2.5) scale(.75)"/>
+  </svg>;
+}
+
 const readDemo = (): Snapshot => {
   const stored = JSON.parse(localStorage.getItem(DEMO_KEY) || "null") ?? freshDemo();
   const upgraded = upgradeDemo(stored);
@@ -482,10 +489,12 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       {draft && <label className="sd-check"><input type="checkbox" checked={skipped} disabled={busy || batchBusy} onChange={e => setSkips(current => ({ ...current, [bill.id]: e.target.checked }))}/>Submit this bill without WhatsApp</label>}
       {!skipped && <><small>{included.length} bill{included.length === 1 ? "" : "s"} for this customer in one message, each with its own heading and link. Includes your submitted bills{draft ? " and this upload" : ""}.</small><details><summary>Preview preset message</summary><p className="sd-message-preview">{link?.message || whatsappMessage(included.map(bill => ({ bill, link: "[Private bill link · valid for 7 days]" })), profile?.full_name ?? "")}</p></details></>}
       {demo && <small>Customer sharing is disabled in this local demo. PDFs stored in this browser cannot be opened by customers.</small>}
-      {!draft && <div className="sd-actions"><button disabled={demo || busy || batchBusy} onClick={() => openWhatsApp(bill)}>{link ? "Prepare fresh WhatsApp message" : "Open WhatsApp"}</button>
-        {link && link.phone === phoneFor(bill) && <a href={link.url} target="_blank" rel="noreferrer" onClick={e => { if (Date.parse(link.expiresAt) <= Date.now()) { e.preventDefault(); setNotice("This bill link expired. Prepare a fresh WhatsApp message."); } }}>Open WhatsApp</a>}
+      {!draft && <div className="sd-actions">
+        {link && !demo && !busy && !batchBusy
+          ? <a className="sd-whatsapp-action" aria-label="Open WhatsApp" title="Open WhatsApp" href={link.url} target="_blank" rel="noreferrer" onClick={e => { if (Date.parse(link.expiresAt) <= Date.now()) { e.preventDefault(); openWhatsApp(bill); } }}><WhatsAppIcon/></a>
+          : <button className="sd-whatsapp-action" aria-label="Open WhatsApp" title="Open WhatsApp" disabled={demo || busy || batchBusy} onClick={() => openWhatsApp(bill)}><WhatsAppIcon/></button>}
       </div>}
-      {link && <small>Message prepared · link expires {dateTime(link.expiresAt)}. Press Send in your own WhatsApp. Delivery is not tracked.</small>}
+      {link && <small>Message ready · link expires {dateTime(link.expiresAt)}. Open WhatsApp and press Send. The preset message is filled in automatically.</small>}
     </div>;
   }
   function sharingQueue() {
