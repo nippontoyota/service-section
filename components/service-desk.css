@@ -383,3 +383,70 @@
 .sd-operation{overflow-y:auto}
 
 .sd-operation-inline { padding: .6rem 1rem; color: var(--sd-muted, #555); font-size: .9rem; }
+
+/* Service documents use the branch's paper forms as their visual reference. */
+.sd-settlement{margin-top:28px;border-top:1px solid var(--sd-line);padding-top:20px}
+.sd-settlement form{display:grid;gap:16px}.sd-settlement h3,.sd-settlement p{margin:0 0 8px}
+.sd-settlement-fields,.sd-form-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.sd-settlement label{display:grid;gap:6px;font-size:13px;font-weight:600;min-width:0}
+.sd-settlement input,.sd-settlement select,.sd-settlement textarea{width:100%;min-width:0;border:1px solid #c8bdc1;border-radius:5px;padding:10px;background:#fff;color:#252125;font:inherit;box-sizing:border-box}
+.sd-settlement textarea{min-height:72px;resize:vertical}
+.sd-settlement input:focus-visible,.sd-settlement textarea:focus-visible,.sd-settlement select:focus-visible{outline:2px solid #b52d58;outline-offset:2px}
+.sd-allocations{border-top:1px solid var(--sd-line)}
+.sd-allocation{display:flex;align-items:center;flex-wrap:wrap;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:1px solid var(--sd-line)}
+.sd-allocation small{display:block;color:#625b60;margin-top:4px}
+.sd-allocation .sd-bill-check{display:flex;align-items:center;gap:12px}.sd-bill-check input{width:18px;height:18px;accent-color:#d71920}
+.sd-credit-fields,.sd-credit-sheet{background:#f5c9d7;border:1px solid #b77c90;border-radius:6px;padding:20px;color:#39232b}
+.sd-credit-fields legend{font-size:15px;font-weight:750;letter-spacing:.04em;padding:0 8px}
+.sd-insurance-fields,.sd-insurance-sheet{background:#f4f7fa;border:1px solid #c6d1db;border-radius:6px;padding:20px}
+.sd-credit-sheet,.sd-insurance-sheet{margin-top:28px}
+.sd-credit-sheet header,.sd-insurance-sheet header{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap}
+.sd-credit-sheet header h3,.sd-insurance-sheet header h3{font-size:20px;letter-spacing:.03em}
+.sd-form-details{margin:18px 0}.sd-form-details dt{font-size:12px;color:#634852}.sd-form-details dd{margin:4px 0 0;font-weight:600;overflow-wrap:anywhere}
+.sd-credit-sheet table,.sd-insurance-sheet table{width:100%;border-collapse:collapse;background:transparent;margin:12px 0 20px}
+.sd-credit-sheet th,.sd-credit-sheet td,.sd-insurance-sheet th,.sd-insurance-sheet td{padding:10px 8px;border:1px solid #ba8e9d;text-align:left;font-size:12px;white-space:normal}
+.sd-credit-sheet td small,.sd-insurance-sheet td small{display:block}.sd-credit-sheet th{background:#efb8cb}
+.sd-collection-total{display:flex;justify-content:space-between;gap:16px;align-items:center}.sd-collection-total strong{font-size:24px;font-variant-numeric:tabular-nums}
+.sd-gate-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.sd-gate-fields label{display:grid;gap:6px}.sd-gate-fields input{min-width:0;width:100%;padding:10px;border:1px solid var(--sd-line);border-radius:5px}
+@media(max-width:600px){.sd-settlement-fields,.sd-form-details,.sd-gate-fields{grid-template-columns:1fr}.sd-credit-sheet,.sd-credit-fields,.sd-insurance-sheet{padding:14px}.sd-allocation{align-items:flex-start}.sd-credit-sheet header h3{font-size:17px}}
+@media print{
+ body:has(.sd-credit-sheet),body:has(.sd-insurance-sheet){background:white}
+ body:has(.sd-credit-sheet) * ,body:has(.sd-insurance-sheet) *{visibility:hidden}
+ .sd-credit-sheet,.sd-credit-sheet *,.sd-insurance-sheet,.sd-insurance-sheet *{visibility:visible!important;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+ .sd-dialog:has(.sd-credit-sheet),.sd-dialog:has(.sd-insurance-sheet){position:absolute!important;inset:0!important;width:100%!important;max-width:none!important;max-height:none!important;height:auto!important;overflow:visible!important;border:0!important}
+ .sd-dialog:has(.sd-credit-sheet) .sd-dialog-body,.sd-dialog:has(.sd-insurance-sheet) .sd-dialog-body{overflow:visible!important}
+ .sd-credit-sheet,.sd-insurance-sheet{position:absolute;left:0;top:0;width:100%;box-sizing:border-box;margin:0;border-radius:0;break-inside:avoid}
+ .sd-credit-sheet textarea,.sd-insurance-sheet textarea{field-sizing:content;resize:none;min-height:70px}
+ .sd-no-print,.sd-no-print *{display:none!important}
+ .sd-dialog::backdrop{background:transparent!important}
+}
+.sd-status.is-credit{background:#f5c9d7;color:#6c2941}.sd-status.is-insurance{background:#eaf1f7;color:#31516b}
+@media print{
+ @page{size:A5 landscape;margin:8mm}
+ body:has(.sd-credit-sheet) .sd-app,body:has(.sd-insurance-sheet) .sd-app{display:block;height:auto;min-height:0;width:auto}
+ .sd-app:has(.sd-credit-sheet)>:not(.sd-dialog),.sd-app:has(.sd-insurance-sheet)>:not(.sd-dialog),
+ .sd-dialog:has(.sd-credit-sheet) .sd-dialog-header,.sd-dialog:has(.sd-insurance-sheet) .sd-dialog-header,
+ .sd-dialog-body:has(.sd-credit-sheet)>:not(.sd-settlement),.sd-dialog-body:has(.sd-insurance-sheet)>:not(.sd-settlement),
+ .sd-settlement:has(.sd-credit-sheet)>:not(.sd-credit-sheet),.sd-settlement:has(.sd-insurance-sheet)>:not(.sd-insurance-sheet){display:none!important}
+ .sd-dialog:has(.sd-credit-sheet),.sd-dialog:has(.sd-insurance-sheet){margin:0!important;transform:none!important;display:block!important}
+ .sd-dialog:has(.sd-credit-sheet) .sd-dialog-body,.sd-dialog:has(.sd-insurance-sheet) .sd-dialog-body{padding:0!important}
+ .sd-settlement{padding:0;margin:0;border:0}.sd-credit-sheet,.sd-insurance-sheet{position:relative;padding:12px;font-size:11px}
+ .sd-credit-sheet .sd-form-details,.sd-insurance-sheet .sd-form-details{grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+ .sd-credit-sheet .sd-settlement-fields,.sd-insurance-sheet .sd-settlement-fields{grid-template-columns:repeat(3,1fr);gap:10px}
+ .sd-credit-sheet header h3,.sd-insurance-sheet header h3{font-size:17px}
+ .sd-credit-sheet td,.sd-credit-sheet th,.sd-insurance-sheet td,.sd-insurance-sheet th{padding:6px}
+}
+.sd-daily-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:1000px){.sd-daily-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.sd-daily-metrics{grid-template-columns:1fr}}
+@media print{
+ .sd-credit-sheet,.sd-insurance-sheet{break-inside:auto;padding:10px}
+ .sd-credit-sheet p,.sd-insurance-sheet p{font-size:10px;line-height:1.2;margin:5px 0}
+ .sd-credit-sheet .sd-form-details,.sd-insurance-sheet .sd-form-details{margin:8px 0;gap:6px}
+ .sd-credit-sheet dt,.sd-insurance-sheet dt{font-size:9px;line-height:1.2}
+ .sd-credit-sheet dd,.sd-insurance-sheet dd{font-size:10px;line-height:1.2;margin:2px 0}
+ .sd-credit-sheet table,.sd-insurance-sheet table{margin:8px 0}
+ .sd-credit-sheet td,.sd-credit-sheet th,.sd-insurance-sheet td,.sd-insurance-sheet th{font-size:10px;padding:5px;line-height:1.2}
+ .sd-credit-sheet textarea,.sd-insurance-sheet textarea{min-height:38px;padding:5px;font-size:10px;line-height:1.2}
+ .sd-credit-sheet label,.sd-insurance-sheet label{font-size:10px;break-inside:avoid}
+}

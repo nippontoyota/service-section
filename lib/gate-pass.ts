@@ -1,5 +1,7 @@
 export const gateCodePattern = /^[A-Za-z0-9_-]{43}$/;
+export type GatePassDocument = { billId: string; invoiceNumber: string | null; invoiceDate: string | null; jobNumber: string | null; jobDate: string | null };
 export type GatePass = {
+ number?: number; issuedAt?: string; issuedBy?: string; documents?: GatePassDocument[];
  status: "Valid" | "Expired" | "Already used" | "Revoked" | "Payment not cleared" | "Invalid";
  id?: string; customerName?: string; vehicle?: string; issuer?: string; expiresAt?: string; exitAt?: string; confirmed?: boolean;
 };

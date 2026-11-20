@@ -27,13 +27,13 @@ const server=createServer(async(req,res)=>{
  }
  calls.push(url.pathname);
  if(url.pathname==='/rest/v1/rpc/app_desk_snapshot'){assert.equal(body.staff,cashier.id);return json(res,{bills,payments,staff:[cashier],audit:[],as_of:new Date().toISOString()});}
- if(url.pathname==='/rest/v1/rpc/app_desk_action'){assert.equal(body.staff,cashier.id);assert.equal(body.action,'collect');bill.approval_status='approved';payments.push({id:randomUUID(),bill_id:bill.id,amount_paise:10000,method:'Cash',occurred_at:new Date().toISOString(),recorded_by:cashier.id,source:'cashier'});return json(res,null);}
+ if(url.pathname==='/rest/v1/rpc/app_settle_bills'){assert.equal(body.staff,cashier.id);assert.equal(body.payload.action,'collect_batch');assert.equal(body.payload.entries.length,1);assert.equal(body.payload.entries[0].amountPaise,10000);bill.approval_status='approved';payments.push({id:randomUUID(),bill_id:bill.id,amount_paise:10000,method:'Cash',occurred_at:new Date().toISOString(),recorded_by:cashier.id,source:'cashier'});return json(res,null);}
  if(url.pathname==='/rest/v1/rpc/app_issue_gate_pass'){
   assert.equal(body.staff,cashier.id);assert.equal(body.phone,'+919876543210');
   assert.ok(bills.some(b=>b.id===body.target&&b.uploads.confirmed_at));
   if(blockers)return json(res,{error:'Payment not cleared.',blockers:[{reference:blockers}]});
   if(fail)return json(res,{message:'Database unavailable'},503);
-  if(!pass){storedHash=body.pass_hash;pass={id:body.pass_id,status:'Valid',customerName:'Synthetic Customer',vehicle:'KL01AB1234',issuer:'Test Cashier',expiresAt:new Date(Date.now()+86400000).toISOString()};}
+  if(!pass){storedHash=body.pass_hash;pass={id:body.pass_id,status:'Valid',customerName:'Synthetic Customer',vehicle:'KL01AB1234',issuer:'Test Cashier',issuedBy:'Test Cashier',number:1,issuedAt:new Date().toISOString(),documents:[{billId:body.target,invoiceNumber:'GATE-TEST',invoiceDate:'2026-11-14',jobNumber:'RO-TEST',jobDate:'2026-11-12'}],expiresAt:new Date(Date.now()+86400000).toISOString()};}
   return json(res,pass);
  }
  if(url.pathname==='/rest/v1/rpc/app_public_gate_pass'||url.pathname==='/rest/v1/rpc/app_check_gate_pass'){
@@ -78,7 +78,7 @@ try{
   assert.match(await dialog.innerText(),/No collection required/);
   assert.doesNotMatch(await dialog.innerText(),/An invoice alone does not confirm payment/);
   assert.equal(await page.getByLabel('Mode of payment').count(),0);
-  assert.equal(await page.getByRole('button',{name:/Mark as paid/}).count(),0);
+  assert.equal(await page.getByRole('button',{name:/Record payment/}).count(),0);
   assert.equal(await page.getByLabel('Customer WhatsApp number').inputValue(),'','Cashier must enter the number; ignore saved advisor contact');
   const beforeIssue=calls.filter(path=>path.endsWith('app_issue_gate_pass')).length;
   await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();
@@ -101,7 +101,7 @@ try{
  await page.getByLabel('Mode of payment').selectOption('Cash');
  let heldPayment;
  await page.route('**/api/desk', route => route.request().method() === 'POST' ? (heldPayment = route) : route.continue());
- await page.getByRole('button',{name:/Mark as paid/}).click();
+ await page.getByRole('button',{name:/Record payment/}).click();
  await page.locator('.sd-dialog .sd-operation-inline').filter({hasText:'Recording payment…'}).waitFor();
  assert.equal(await page.locator('.sd-operation[open]').count(),0,'Payment uses inline pending');
  await page.keyboard.press('Escape'); assert.equal(await page.locator('.sd-dialog[open]').count(),1,'Pending payment keeps details open');
@@ -124,11 +124,11 @@ try{
  await page.getByRole('button',{name:'Close bill details'}).click();await page.getByRole('button',{name:/^Archive/}).click();await page.getByRole('button',{name:'GATE-TEST',exact:true}).click();await page.getByRole('button',{name:'Issue gate pass',exact:true}).waitFor();
  const anonymous=await browser.newContext({viewport:{width:390,height:844}}), customer=await anonymous.newPage();
  const response=await customer.goto(link);assert.equal(response.status(),200);assert.match(response.headers()['cache-control'],/no-store/);assert.equal(response.headers()['referrer-policy'],'no-referrer');assert.match(response.headers()['x-robots-tag'],/noindex/);
- await customer.getByRole('img',{name:'Gate pass QR code'}).waitFor();assert.equal(confirms,0);
+ await customer.getByRole('img',{name:'Gate pass QR code'}).waitFor();await customer.getByRole('button',{name:'Print gate pass'}).waitFor();assert.match(await customer.locator('body').innerText(),/GP-000001/);assert.equal(confirms,0);
  // Decode the actual locally generated QR with the same scanner package used by the UI.
  await customer.route('**/test-qr/**',route=>{const file=route.request().url().endsWith('worker.min.js')?'qr-scanner-worker.min.js':'qr-scanner.min.js';return route.fulfill({contentType:'text/javascript',body:readFileSync('node_modules/qr-scanner/'+file)});});
  const dataUrl=await customer.getByRole('img').getAttribute('src');
- // Public page CSP intentionally forbids script; decode on the authenticated scanner page instead.
+ // Public page allows only its nonce-protected print script; decode on the authenticated scanner page.
  await context.addCookies([{name:'billdesk_session',value:tokens.guard,url:base}]);
  await page.goto(base+'/security');await page.getByRole('button',{name:'Scan QR'}).waitFor();
  await page.route('**/test-qr/**',route=>{const file=route.request().url().endsWith('worker.min.js')?'qr-scanner-worker.min.js':'qr-scanner.min.js';return route.fulfill({contentType:'text/javascript',body:readFileSync('node_modules/qr-scanner/'+file)});});
@@ -146,7 +146,7 @@ try{
  assert.equal((await fetch(link)).status,503);fail=false;
  await page.getByRole('button',{name:'Retry verification'}).click();await page.getByRole('button',{name:'Confirm exit',exact:true}).click();await page.getByText('Exit confirmed',{exact:true}).waitFor();assert.equal(confirms,1);
  assert.equal((await (await post('/api/gate-passes/confirm-exit',{code})).json()).status,'Already used');assert.equal(confirms,1);
- await customer.reload();await customer.getByRole('heading',{name:'Already used',exact:true}).waitFor();assert.equal(await customer.getByRole('img').count(),1);
+ await customer.reload();await customer.getByRole('status').filter({hasText:'Already used'}).waitFor();assert.equal(await customer.getByRole('img').count(),1);
  assert.equal((await fetch(base+'/g/'+'z'.repeat(43))).status,404);
  assert.equal((await fetch(link,{method:'HEAD'})).status,200);assert.equal(confirms,1);
  await page.goto(base+'/security/verify/'+'z'.repeat(43));

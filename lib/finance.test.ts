@@ -87,20 +87,20 @@ test("India midnight is reported on the correct day", () => {
   assert.equal(indiaDate("2026-11-03T18:29:59Z"), "2026-11-03");
   assert.equal(indiaDate("2026-11-03T18:30:00Z"), "2026-11-04");
 });
-test("cashier daily analytics includes pending invoices and tracks their current payment status", () => {
+test("cashier daily analytics uses submission day and tracks current collections", () => {
   let data = fixtureSnapshot();
   const day = "2026-11-05";
-  data.bills.forEach(b => { b.invoice_date = day; });
+  data.bills.forEach(b => { b.invoice_date = "2026-10-01"; b.uploads!.confirmed_at = day + "T09:00:00Z"; });
   data.bills[5].amount_paise = null;
   const bill = data.bills[4];
   data.bills.push(
-    { ...bill, id: "other-day", invoice_date: "2026-11-04" },
-    { ...bill, id: "missing-date", invoice_date: null },
+    { ...bill, id: "other-day", uploads: { ...bill.uploads!, confirmed_at: "2026-11-04T09:00:00Z" } },
+    { ...bill, id: "missing-date", invoice_date: null, uploads: { ...bill.uploads!, confirmed_at: "2026-11-04T09:00:00Z" } },
     { ...bill, id: "draft", uploads: { original_filename: "draft.pdf", confirmed_at: null } },
     { ...bill, id: "note", amount_paise: null, amount_evidence: "No monetary total stated; supporting note", field_confidence: { document: { kind: "warranty_note", billType: "Warranty", billedTo: "", typeEvidence: "" } } },
   );
   data.payments.push({ ...data.payments[0], id: "archived", bill_id: data.bills[2].id, amount_paise: data.bills[2].amount_paise!, is_archived: true });
-  assert.deepEqual(cashierDailyReport(data, day), { bills: 6, paid: 2, unpaid: 4, billedAmount: 12969700, paidAmount: 6130500, unpaidAmount: 6839200, unreadAmounts: 1 });
+  assert.deepEqual(cashierDailyReport(data, day), { bills: 6, paid: 2, unpaid: 4, billedAmount: 12969700, paidAmount: 6130500, collectedAmount: 6130500, unpaidAmount: 6839200, unreadAmounts: 1 });
   const cashier = data.staff.find(p => p.role === "cashier")!;
   data = demoAction(data, cashier, "collect", bill.id, "", "Cash");
   // Payment on a later day still settles the invoice in its original day's summary.
@@ -110,7 +110,7 @@ test("cashier daily analytics includes pending invoices and tracks their current
   assert.equal(paid.billedAmount, paid.paidAmount + paid.unpaidAmount);
   data = demoAction(data, data.staff.find(p => p.role === "super_admin")!, "reverse", data.payments.at(-1)!.id, "Correction");
   assert.equal(cashierDailyReport(data, day).unpaid, 4);
-  assert.deepEqual(cashierDailyReport(data, "2026-11-07"), { bills: 0, paid: 0, unpaid: 0, billedAmount: 0, paidAmount: 0, unpaidAmount: 0, unreadAmounts: 0 });
+  assert.deepEqual(cashierDailyReport(data, "2026-11-07"), { bills: 0, paid: 0, unpaid: 0, billedAmount: 0, paidAmount: 0, collectedAmount: 0, unpaidAmount: 0, unreadAmounts: 0 });
 });
 test("customer groups span bills and vehicles without merging names alone", () => {
   const data = fixtureSnapshot();

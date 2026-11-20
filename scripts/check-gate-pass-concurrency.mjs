@@ -52,7 +52,21 @@ try{
  await a.query('begin');assert.equal((await confirm(a,code)).confirmed,true);
  finished=false;waiting=b.query("select app_issue_gate_pass($1,$2,'+919876543210',$3,$4) result",[cashier,next,randomUUID(),'2'.repeat(64)]).then(r=>{finished=true;return r.rows[0].result;});
  await new Promise(r=>setTimeout(r,100));assert.equal(finished,false,'issuance waits for completed exit');await a.query('commit');assert.match((await waiting).error,/completed exit/);
- console.log('Real PostgreSQL concurrency passed: simultaneous issuance returns one pass; simultaneous confirmation records one exit; reversal/submission commits block confirmation; completed exit blocks reissuance.');
+ // Batch collection retries and approval revocation use the same lock as gate exits.
+ const batchBill1=randomUUID(),batchBill2=randomUUID();await addBill(batchBill1,upload);await addBill(batchBill2,upload);
+ const batchId=randomUUID();const batchPayload={action:'collect_batch',payer:'customer',method:'Cash',entries:[{billId:batchBill1,amountPaise:10000},{billId:batchBill2,amountPaise:10000}],details:{}};
+ const collectBatch=(client,id=batchId)=>client.query('select app_settle_bills($1,$2,$3)',[cashier,id,JSON.stringify(batchPayload)]);
+ await Promise.all([collectBatch(a),collectBatch(b)]);
+ assert.equal((await a.query('select count(*)::int n from payments where collection_id=$1',[batchId])).rows[0].n,2,'retry cannot double-collect either invoice');
+ await assert.rejects(collectBatch(b,randomUUID()),/exceeds/);
+ const creditBill=randomUUID();await addBill(creditBill,upload);const creditId=randomUUID();
+ await a.query('select app_settle_bills($1,$2,$3)',[cashier,creditId,JSON.stringify({action:'arrange',kind:'credit',payer:'customer',entries:[{billId:creditBill,amountPaise:0}],details:{approvedBy:'Manager',approvedOn:'2026-11-20',dueDate:'2026-12-20'}})]);
+ const creditPass=(await a.query("select app_issue_gate_pass($1,$2,'+919876543210',$3,$4) result",[cashier,creditBill,randomUUID(),'3'.repeat(64)])).rows[0].result;
+ code=await hash(creditPass);
+ await a.query('begin');await a.query('select app_settle_bills($1,$2,$3)',[manager,randomUUID(),JSON.stringify({action:'revoke_settlement',settlementId:creditId,details:{remarks:'Credit approval correction'}})]);
+ finished=false;waiting=confirm(b,code).then(r=>{finished=true;return r;});await new Promise(r=>setTimeout(r,100));assert.equal(finished,false,'confirmation waits for credit revocation');
+ await a.query('commit');assert.equal((await waiting).status,'Revoked');
+ console.log('Real PostgreSQL concurrency passed: simultaneous issuance returns one pass; simultaneous confirmation records one exit; reversal/submission commits block confirmation; completed exit blocks reissuance; batch retries collect once; credit revocation blocks exit.');
 }finally{
  await a.query('rollback').catch(()=>{});await b.query('rollback').catch(()=>{});a.release();b.release();await pool.end();await admin.query('drop database '+name);await admin.end();
 }

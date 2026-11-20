@@ -4,6 +4,7 @@ import { AuthenticationError, requireStaff, startSession } from "@/lib/supabase-
 import { hashPassword } from "@/lib/password";
 import { loadDesk } from "@/lib/desk-session";
 import { paymentMethod, transactionId } from "@/lib/desk";
+import { normalizeSettlementRequest } from "@/lib/settlement";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: { "Cache-Control": "no-store" } });
@@ -26,6 +27,10 @@ export async function POST(request: Request) {
       const response = json({ ok: true });
       await startSession(response, user.id, passwordHash);
       return response;
+    } else if (["collect_batch", "arrange", "update_settlement", "revoke_settlement"].includes(body.action)) {
+      const payload = normalizeSettlementRequest(body);
+      const { error } = await service.rpc("app_settle_bills", { staff: user.id, request_id: payload.requestId, payload });
+      if (error) throw new Error(error.code === "PGRST202" ? "Apply the settlements database migration before recording this collection." : error.message);
     } else if (["approve", "collect", "reverse"].includes(body.action)) {
       const method = body.action === "collect" ? paymentMethod(body.method, body.otherMethod) : "";
       const reference = body.action === "collect" ? transactionId(body.transactionId, method) : null;

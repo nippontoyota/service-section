@@ -45,6 +45,18 @@ For a new project, apply these SQL files in order through Supabase SQL Editor:
 6. `supabase/migrations/202611050002_cashier_mark_paid.sql` (required before deploying the one-step cashier payment flow)
 7. `supabase/migrations/202611070001_payment_method_and_token.sql` — apply before deploying the token and payment-method forms; existing records remain unchanged.
 
+8. `supabase/migrations/202611100001_admin_chosen_password.sql`
+9. `supabase/migrations/202611100002_transaction_id_and_delete_staff.sql`
+10. `supabase/migrations/202611100003_required_payment_references.sql`
+11. `supabase/migrations/202611110001_whatsapp_sharing.sql`
+12. `supabase/migrations/202611140001_customer_bill_links.sql`
+13. `supabase/migrations/202611140002_gate_passes.sql`
+14. `supabase/migrations/202611140003_bill_attachments.sql`
+15. `supabase/migrations/202611200001_settlements.sql`
+16. `supabase/migrations/202611200002_gate_pass_documents.sql`
+
+Apply both November 20 migrations before deploying the settlement UI. They preserve historical bills/payments, add arrangements and idempotent collection references, and retain existing gate-pass links. Existing payments default to customer collections. The app shows an actionable migration error if the new RPC is unavailable. The old token-required setting is ignored. No production migration is run by local verification.
+
 The migrations create the private `bills` storage bucket and the staff, customer, billing, session and audit structures. For a new database only, configure `.env.local` locally and run `npm run bootstrap:staff` once. The documented starter passwords are public; replace them before staff use the public deployment. Existing configured staff accounts do not need another bootstrap.
 
 If migrating an older installation, follow the retention instructions in README: disable old purge schedules and deploy the retired purge function. There is no Vercel deletion cron.

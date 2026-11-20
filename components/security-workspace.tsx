@@ -98,7 +98,7 @@ export function SecurityWorkspace({ origin, code }: { origin: string; code?: str
    {!pass && !error && <p role="status">Verifying…</p>}
    {pass && <div aria-live="polite">
     <p className={"gate-result " + (pass.status === "Valid" || confirmed ? "gate-valid" : "")}>{confirmed ? "Exit confirmed" : pass.status}</p>
-    {pass.vehicle && <><h2 className="gate-registration">{pass.vehicle}</h2><p>{pass.customerName}</p><dl><dt>Issued by</dt><dd>{pass.issuer}</dd><dt>Expires</dt><dd>{new Date(pass.expiresAt!).toLocaleString("en-IN")}</dd>{pass.exitAt && <><dt>Exit recorded</dt><dd>{new Date(pass.exitAt).toLocaleString("en-IN")}</dd></>}</dl></>}
+    {pass.vehicle && <><h2 className="gate-registration">{pass.vehicle}</h2><p>{pass.customerName}</p><dl><dt>Pass number</dt><dd>GP-{String(pass.number || "").padStart(6, "0")}</dd><dt>Issued by</dt><dd>{pass.issuedBy || pass.issuer}</dd><dt>Expires</dt><dd>{new Date(pass.expiresAt!).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</dd>{pass.exitAt && <><dt>Exit recorded</dt><dd>{new Date(pass.exitAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</dd></>}</dl></>}
     {pass.status === "Valid" && !busy && <><p>Compare this registration with the physical vehicle before confirming.</p><button className="sd-primary" onClick={() => void check(true)}>Confirm exit</button></>}
    </div>}
    {!confirmed && <button disabled={busy} className="sd-secondary" onClick={() => void check()}>{busy ? "Checking…" : "Retry verification"}</button>}

@@ -8,6 +8,10 @@ export type BillDocument = {
   typeEvidence: string;
 };
 export type DeskBill = {
+  settlement?: import("./settlement").Settlement | null;
+  gate_completed?: boolean;
+  customer_share_paise?: number | null;
+  credit_limit_paise?: number | null;
   customer_phone?: string | null;
   token_number?: string | null;
   bill_type?: string; reference_file?: string;
@@ -21,7 +25,7 @@ export type DeskBill = {
   extraction_issues: string[]; amount_evidence: string; payment_evidence: PaymentEvidence[];
   uploads?: { original_filename: string; confirmed_at: string | null; file_hash?: string };
 };
-export type Payment = { id: string; bill_id: string; amount_paise: number; method: string; transaction_id?: string | null; occurred_at: string; recorded_at: string; recorded_by: string | null; source: string; reversal_of: string | null; reason: string | null; is_archived?: boolean };
+export type Payment = { payer?: "customer" | "insurer"; collection_id?: string | null; id: string; bill_id: string; amount_paise: number; method: string; transaction_id?: string | null; occurred_at: string; recorded_at: string; recorded_by: string | null; source: string; reversal_of: string | null; reason: string | null; is_archived?: boolean };
 export type Audit = { id: string; bill_id: string | null; actor_id: string | null; action: string; created_at: string; detail: Record<string, unknown> };
 export type DraftUpload = { id: string; original_filename: string; status: string; processing_error: string | null; bills: DeskBill[] };
 export type Snapshot = { drafts?: DraftUpload[]; bills: DeskBill[]; payments: Payment[]; staff: Staff[]; audit: Audit[]; as_of: string; schema_version?: number };
@@ -87,7 +91,8 @@ export function report(snapshot: Snapshot, staffId = "") {
   const unpaid = bills.filter(b => !isPaid(b, snapshot.payments));
   const pending = unpaid.filter(b => b.approval_status !== "approved");
   const total = (rows: DeskBill[]) => rows.reduce((sum, b) => sum + (b.amount_paise ?? 0), 0);
-  return { paid, unpaid, pending, paidAmount: total(paid), unpaidAmount: total(unpaid),
+  return { paid, unpaid, pending, paidAmount: total(paid), collectedAmount: bills.reduce((sum, b) => sum + collected(b, snapshot.payments), 0),
+    unpaidAmount: unpaid.reduce((sum, b) => sum + (balance(b, snapshot.payments) ?? 0), 0),
     unreadAmounts: unpaid.filter(b => b.amount_paise === null).length };
 }
 
@@ -108,11 +113,12 @@ export function compareCashierTokens(a: DeskBill, b: DeskBill) {
 }
 
 export function cashierDailyReport(snapshot: Snapshot, day: string) {
-  const bills = snapshot.bills.filter(b => b.uploads?.confirmed_at && b.invoice_date === day && !isSupportingNote(b));
+  const bills = snapshot.bills.filter(b => b.uploads?.confirmed_at && indiaDate(b.uploads.confirmed_at) === day && !isSupportingNote(b));
   const paid = bills.filter(b => isPaid(b, snapshot.payments));
   const unpaid = bills.filter(b => !isPaid(b, snapshot.payments));
   const total = (rows: DeskBill[]) => rows.reduce((sum, b) => sum + (b.amount_paise ?? 0), 0);
   return { bills: bills.length, paid: paid.length, unpaid: unpaid.length,
-    billedAmount: total(bills), paidAmount: total(paid), unpaidAmount: total(unpaid),
+    billedAmount: total(bills), paidAmount: total(paid), collectedAmount: bills.reduce((sum, b) => sum + collected(b, snapshot.payments), 0),
+    unpaidAmount: unpaid.reduce((sum, b) => sum + (balance(b, snapshot.payments) ?? 0), 0),
     unreadAmounts: bills.filter(b => b.amount_paise === null).length };
 }

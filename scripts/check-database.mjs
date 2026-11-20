@@ -473,5 +473,7 @@ for (const role of ["anon", "authenticated"]) {
 }
 await db.exec("reset role");
 console.log("Attachment audit passed: private role/owner validation, no fictional expiry, and backward-compatible link preparation.");
+const { checkSettlements } = await import("./check-settlements-db.mjs");
+await checkSettlements(db);
 await db.close();
 console.log("All migrations passed: bill history, financial workflow, app credentials, role boundaries, session revocation, rate limiting and legacy Auth denial.");

@@ -7,11 +7,12 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
  try {
   const { profile, service } = await requireRole(request, "cashier");
-  const { billId, phone: value } = await request.json();
+  const { billId, phone: value, jobs = [] } = await request.json();
   if (typeof billId !== "string" || !/^[0-9a-f-]{36}$/i.test(billId)) return gateJson({ error: "Select a submitted bill" }, 400);
+  if (!Array.isArray(jobs) || jobs.length > 100 || jobs.some(job => !job || typeof job.billId !== "string" || typeof job.jobNumber !== "string" || job.jobNumber.length > 100 || typeof job.jobDate !== "string" || (job.jobDate && !/^\d{4}-\d{2}-\d{2}$/.test(job.jobDate)))) return gateJson({ error: "Invalid job details" }, 400);
   const phone = customerPhone(value), origin = customerBillOrigin(), candidate = newGatePass();
   const { data, error } = await service.rpc("app_issue_gate_pass", {
-   staff: profile.id, target: billId, phone, pass_id: candidate.id, pass_hash: candidate.hash,
+   staff: profile.id, target: billId, phone, pass_id: candidate.id, pass_hash: candidate.hash, document_details: jobs,
   });
   if (error) return gateJson({ error: error.code === "P0001" ? error.message : "Gate pass could not be saved. Please retry." }, 503);
   if (data.error) return gateJson(data, 409);

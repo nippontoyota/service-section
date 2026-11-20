@@ -33,7 +33,7 @@ const server=createServer(async(req,res)=>{
   if(path==='/rest/v1/rpc/app_confirm_upload'){
    let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);
    confirmationBodies.push(body);
-   assert.equal(body.staff,profile.id);assert.equal(body.require_token,true);
+   assert.equal(body.staff,profile.id);assert.equal(body.require_token,false);
    const upload=uploads.find(u=>u.id===body.target);
    if(!upload)return json(res,{code:'P0002',message:'Upload not found'},400);
    if(upload.confirmed_at)return json(res,upload);
@@ -42,7 +42,6 @@ const server=createServer(async(req,res)=>{
    assert.deepEqual(Object.keys(body.contacts).sort(),selected.map(b=>b.id).sort());
    for(const b of selected){
     assert.deepEqual(body.contacts[b.id],{phone:null,skipWhatsApp:true},'Server must ignore legacy advisor phone choices');
-    if(!(body.tokens[b.id]??b.token_number))return json(res,{code:'22023',message:'Token number is required for every bill at this branch'},400);
    }
    for(const b of selected){b.token_number=body.tokens[b.id]??b.token_number;b.customer_phone=null;}
    confirms++;upload.confirmed_at=new Date().toISOString();upload.status='confirmed';return json(res,upload);
@@ -60,7 +59,7 @@ try {
  assert.equal((await post(confirm,{tokens:{}},'invalid')).status,401);
  profile.role='cashier';assert.equal((await post(confirm,{tokens:{}})).status,403);profile.role='service_advisor';
  assert.equal((await post(confirm,{tokens:[]})).status,400);
- assert.equal((await post(confirm,{tokens:{}})).status,400,'Required tokens still enforced');
+ assert.equal((await post(confirm,{tokens:{[alpha.id]:123}})).status,400,'Token format is still validated');
  failLookup=true;assert.equal((await post(confirm,{tokens:{[alpha.id]:'1'}})).status,503);failLookup=false;
  assert.equal(confirms,0);
  for(const method of ['POST','GET']){
@@ -81,9 +80,7 @@ try {
  assert.equal(await review.getByLabel('Customer WhatsApp number').count(),0);
  assert.doesNotMatch(await review.innerText(),/WhatsApp|Prepare PDFs|Share PDFs|Copy message/);
  assert.equal(await page.evaluate(id=>sessionStorage.getItem('desk-sharing-batch:'+id),profile.id),null);
- await click('Submit all to cashier');
- await review.getByText('Token number is required for every bill at this branch',{exact:true}).waitFor();assert.equal(confirms,0);
- for(let i=0;i<3;i++)await review.getByLabel('Token number (required)').nth(i).fill('T-'+i);
+ for(let i=0;i<2;i++)await review.getByLabel('Token number (optional)').nth(i).fill('T-'+i);
  await review.getByRole('button',{name:'View bill',exact:true}).first().click();
  assert.equal(await page.getByRole('dialog',{name:'Bill INV-ALPHA',exact:true}).getByLabel('Customer WhatsApp number').count(),0);
  await click('Close bill details');
@@ -92,7 +89,7 @@ try {
  await page.getByRole('dialog',{name:'Some bills were not submitted',exact:true}).waitFor();await click('Continue');
  assert.equal(confirms,2);assert.equal(await page.locator('.sd-queue-item').count(),1);
  await page.reload();await click('Upload bills (1)');
- await review.getByLabel('Token number (required)').fill('T-2');failConfirm=null;
+ await review.getByLabel('Token number (optional)').fill('T-2');failConfirm=null;
  await click('Submit to cashier');await review.waitFor({state:'hidden'});await settled();
  assert.equal(confirms,3);assert(bills.every(b=>b.customer_phone===null));
  assert.equal(await page.locator('.sd-sharing-queue').count(),0);assert.deepEqual(shares,[]);
@@ -102,6 +99,7 @@ try {
  assert.equal((await post('/api/uploads/'+legacy.upload_id+'/confirm',{tokens:{[legacy.id]:'OLD'},contacts:{[legacy.id]:{phone:'+919876543210',skipWhatsApp:false}}})).status,200);
  assert.equal(legacy.customer_phone,null);
  // Lost confirmation responses reconcile via refresh, without a sharing queue or resubmission.
+ const optional=draft('OPTIONAL');assert.equal((await post('/api/uploads/'+optional.upload_id+'/confirm',{tokens:{}})).status,200);assert.equal(optional.token_number,null);
  const timeout=draft('TIMEOUT');timeout.token_number='TIME';await click('Refresh');await settled();await click('Upload bills (1)');
  await page.clock.install();let committed=false;const before=confirms;
  await page.route('**/api/uploads/'+timeout.upload_id+'/confirm',async route=>{await route.fetch();committed=true;});

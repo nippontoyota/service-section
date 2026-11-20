@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import { ArrowUpRight, Check, ChevronRight, Eye, EyeOff, FileText, LayoutDashboard, LogOut, Search, ShieldCheck, Trash2, Upload, Users, X } from "lucide-react";
-import { cashierDailyReport, cashierView, compareCashierTokens, paymentReferenceLabel, billAmount, billType, isSupportingNote, customerKey, groupCustomers, isPaid, indiaDate, money, report, paymentMethods, tokenNumber, type DeskBill, type Metric, type Snapshot, type Staff } from "@/lib/desk";
+import { balance, cashierDailyReport, compareCashierTokens, paymentReferenceLabel, billAmount, billType, isSupportingNote, customerKey, groupCustomers, isPaid, indiaDate, money, report, tokenNumber, type DeskBill, type Metric, type Snapshot, type Staff } from "@/lib/desk";
 import { DEMO_KEY, demoAccounts, demoAction, demoDeleteStaff, demoPdf, freshDemo, upgradeDemo } from "@/lib/desk-demo";
 import type { ExtractedBill } from "@/lib/pdf/extract";
 import { importReferenceBills, isBuiltInSample } from "@/lib/import-reference-bills";
@@ -15,6 +15,8 @@ import { customerPhone } from "@/lib/whatsapp";
 import { readApiResponse } from "@/lib/api-response";
 import { OperationDialog, OperationStatus, useOperation } from "./operation-feedback";
 import { boundedRequest, requestJson, RequestTimeoutError } from "@/lib/operation";
+import { cashierRows, demoSettlement, normalizeSettlementRequest, releaseCleared, settlementStatus, submittedDay, sameVehicleBills } from "@/lib/settlement";
+import { SettlementPanel } from "./settlement-panel";
 import "./service-desk.css";
 
 const labels = { cashier: "Cashier", service_advisor: "Service advisor", super_admin: "Super admin", security: "Security" };
@@ -22,6 +24,16 @@ const metricNames = { paid: "Total paid bills", unpaid: "Total unpaid bills", pe
 const dateTime = (date: string) => new Date(date).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const empty: Snapshot = { bills: [], payments: [], staff: [], audit: [], as_of: "" };
 type ActionBody = { action: string; target?: string; reason?: string; [key: string]: unknown };
+
+function settlementAudit(detail: Record<string, unknown>) {
+  const request = detail.request as { kind?: string; details?: { approvedBy?: string; insurer?: string } } | undefined;
+  const arrangement = detail.arrangement as { kind?: string; details?: { approvedBy?: string; insurer?: string } } | undefined;
+  const record = arrangement || request;
+  if (record?.kind === "credit") return "Outside approval: " + (record.details?.approvedBy || "—");
+  if (record?.kind === "insurance") return "Insurer: " + (record.details?.insurer || "—");
+  const changes = detail.changes as { remarks?: string; followup1?: string; followup2?: string } | undefined;
+  return changes ? [changes.remarks, changes.followup1, changes.followup2].filter(Boolean).join(" · ") : "";
+}
 
 function WhatsAppIcon() {
   return <svg className="sd-whatsapp-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -37,7 +49,7 @@ const readDemo = (): Snapshot => {
   return upgraded;
 };
 
-export function ServiceDesk({ demo, ready, initial, initialError = "", requireToken = false }: { demo: boolean; ready: boolean; initial?: { profile: Staff; snapshot?: Snapshot }; initialError?: string; requireToken?: boolean }) {
+export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo: boolean; ready: boolean; initial?: { profile: Staff; snapshot?: Snapshot }; initialError?: string }) {
   const [profile, setProfile] = useState<Staff | null>(initial?.profile ?? null);
   const [data, setData] = useState<Snapshot>(initial?.snapshot ?? empty);
   const [busy, setBusy] = useState(false);
@@ -55,8 +67,11 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   const [customerFilter, setCustomerFilter] = useState<string | null>(null);
   const [advisor, setAdvisor] = useState("");
   const [analyticsDay, setAnalyticsDay] = useState(() => indiaDate());
+  const previousToday = useRef(indiaDate());
   const [tokens, setTokens] = useState<Record<string, string>>({});
   const [phones, setPhones] = useState<Record<string, string>>({});
+  const [gateDocuments, setGateDocuments] = useState<Record<string, { jobNumber: string; jobDate: string }>>({});
+  const [gatePages, setGatePages] = useState<Record<string, string>>({});
   const [gateLinks, setGateLinks] = useState<Record<string, string>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
@@ -85,7 +100,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     setData(snapshot); setProfile(user); setRestoring(false); setRefreshError("");
     if (user?.id !== profileId.current) {
       clearPreviews(); setFiles([]); setSelectedId(null); setUploadOpen(false);
-      setPhones({}); setGateLinks({}); setTokens({});
+      setPhones({}); setGateLinks({}); setGatePages({}); setGateDocuments({}); setTokens({});
       setTab(user?.role === "cashier" ? "overview" : demo ? "bills" : "overview");
       profileId.current = user?.id;
     }
@@ -150,7 +165,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     }
   }, [demo, ready, acceptSnapshot, clearPreviews]);
   useEffect(() => {
-    const listener = () => { if (!authLock.current && !batchLock.current && !feedback.lock.current && !uncertain.current) void refresh().catch(e => { setNotice(e.message); setRefreshError(e.message); }); };
+    const listener = () => { const today = indiaDate(); if (today !== previousToday.current) { const yesterday = previousToday.current; setAnalyticsDay(current => current === yesterday ? today : current); previousToday.current = today; } if (!authLock.current && !batchLock.current && !feedback.lock.current && !uncertain.current) void refresh().catch(e => { setNotice(e.message); setRefreshError(e.message); }); };
     const timer = window.setInterval(listener, 30000);
     window.addEventListener("storage", listener);
     if (initialFetch.current) { initialFetch.current = false; listener(); }
@@ -176,7 +191,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     uncertain.current = false; setNeedsRefresh(false);
   }
   async function refreshAfterWrite() {
-    await refresh().catch(e => setRefreshError("Action succeeded, but the workspace could not refresh. " + e.message));
+    await refresh().catch(e => { uncertain.current = true; setNeedsRefresh(true); setRefreshError("Action succeeded, but the workspace could not refresh. " + e.message); });
   }
   async function perform(task: () => Promise<void>, text = "Refreshing workspace…", success = "Workspace refreshed", pendingDisplay: "fullscreen" | "inline" = "inline") {
     const refreshing = task === refreshStatus;
@@ -184,13 +199,14 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     if (batchLock.current || !feedback.begin(text, undefined, pendingDisplay)) return;
     refreshVersion.current++;
     setBusy(true); setNotice("");
-    try { await task(); await feedback.finish("success", success); }
+    try { await task(); await feedback.finish("success", success); return true; }
     catch (e) {
       const message = e instanceof Error ? e.message : "Something went wrong";
       setNotice(message);
       if (refreshing) setRefreshError(message);
       if (e instanceof RequestTimeoutError && e.write) { uncertain.current = true; setNeedsRefresh(true); }
       await feedback.finish("failure", e instanceof RequestTimeoutError && e.write ? "Result uncertain" : "Action could not be completed", message);
+      return false;
     } finally { refreshVersion.current++; setBusy(false); }
   }
   async function login(event: FormEvent<HTMLFormElement>) {
@@ -235,19 +251,20 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       if (!demo) await api("/api/auth/logout", {});
       refreshVersion.current++;
       sessionStorage.removeItem("desk-demo-user"); setProfile(null); setData(empty); setSelectedId(null); clearPreviews(); profileId.current = undefined; setFiles([]); setTokens({}); setUploadOpen(false); setShowPassword(false); setNotice(""); setStaffPassword("");
-      setPhones({}); setGateLinks({});
+      setPhones({}); setGateLinks({}); setGatePages({}); setGateDocuments({});
       await feedback.finish("success", "Signed out");
     } catch (e) { const message = e instanceof Error ? e.message : "Could not sign out. Please retry."; setNotice(message); await feedback.finish("failure", "Sign-out could not be confirmed", message); }
     finally { refreshVersion.current++; authLock.current = false; setAuthTransition(null); }
   }
   async function action(body: ActionBody) {
     if (!profile) return;
-    await perform(async () => {
+    return await perform(async () => {
       if (demo) {
         const snapshot = readDemo();
         const current = snapshot.staff.find(p => p.id === profile.id);
         if (!current?.active) throw new Error("Account disabled");
-        if (["approve","collect","reverse"].includes(body.action)) save(demoAction(snapshot, current, body.action, body.target!, body.reason, body.method as string | undefined, body.otherMethod as string | undefined, body.transactionId));
+        if (["collect_batch","arrange","update_settlement","revoke_settlement"].includes(body.action)) save(demoSettlement(snapshot, current, normalizeSettlementRequest(body)));
+        else if (["approve","collect","reverse"].includes(body.action)) save(demoAction(snapshot, current, body.action, body.target!, body.reason, body.method as string | undefined, body.otherMethod as string | undefined, body.transactionId));
         else if (body.action === "delete_staff") {
           const next = demoDeleteStaff(snapshot, current, body.target!);
           const target = snapshot.staff.find(p => p.id === body.target)!;
@@ -289,8 +306,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       }
       if (body.action === "create_staff") { staffForm.current?.reset(); setStaffPassword(""); }
       if (body.action === "delete_staff") setStaffPassword("");
-      setNotice(body.action === "collect" ? "Bill marked as paid and moved to Archive." : body.action === "delete_staff" ? "Account permanently deleted." : "Saved successfully.");
-    }, ({ reextract: "Reading original PDF…", collect: "Recording payment…", approve: "Approving bill…", reverse: "Reversing payment…", password: "Changing password…", create_staff: "Creating staff account…", delete_staff: "Deleting staff account…", toggle_staff: "Changing staff access…", reset_staff: "Resetting staff password…" } as Record<string, string>)[body.action] || "Saving changes…", body.action === "collect" ? "Payment recorded" : "Changes saved", body.action === "reextract" ? "fullscreen" : "inline");
+      setNotice(body.action === "collect_batch" ? "Collection recorded for the selected bills." : body.action === "arrange" ? "Arrangement and any initial payment saved." : body.action === "collect" ? "Bill marked as paid and moved to Archive." : body.action === "delete_staff" ? "Account permanently deleted." : "Saved successfully.");
+    }, ({ collect_batch: "Recording payment…", arrange: "Saving arrangement…", update_settlement: "Saving follow-ups…", revoke_settlement: "Revoking approval…", reextract: "Reading original PDF…", collect: "Recording payment…", approve: "Approving bill…", reverse: "Reversing payment…", password: "Changing password…", create_staff: "Creating staff account…", delete_staff: "Deleting staff account…", toggle_staff: "Changing staff access…", reset_staff: "Resetting staff password…" } as Record<string, string>)[body.action] || "Saving changes…", ["collect", "collect_batch"].includes(body.action) ? "Payment recorded" : "Changes saved", body.action === "reextract" ? "fullscreen" : "inline");
   }
   function updateFile(id: string, patch: Partial<UploadFile>) {
     setFiles(current => current.map(f => f.id === id ? { ...f, ...patch } : f));
@@ -403,15 +420,18 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     try { phone = customerPhone(phoneFor(bill)); } catch (e) { setNotice((e as Error).message); return; }
     const popup = reserveWhatsAppTab();
     setGateLinks(current => ({ ...current, [bill.id]: "" }));
+    setGatePages(current => ({ ...current, [bill.id]: "" }));
     void perform(async () => {
       try {
         const result = await boundedRequest(async signal => {
-          const response = await fetch("/api/gate-passes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ billId: bill.id, phone }), signal });
+          const response = await fetch("/api/gate-passes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ billId: bill.id, phone, jobs: sameVehicleBills(bill, data.bills).filter(b => !b.gate_completed && gateDocuments[b.id]).map(b => ({ billId: b.id, ...gateDocuments[b.id] })) }), signal });
           const result = await response.json();
           if (!response.ok) throw new Error((result.error || "Gate pass could not be prepared.") + (result.blockers?.length ? " Bills: " + result.blockers.map((b: { reference: string }) => b.reference).join(", ") : ""));
           return result;
         }, true);
         setGateLinks(current => ({ ...current, [bill.id]: result.whatsappUrl }));
+        setGatePages(current => ({ ...current, [bill.id]: result.link }));
+        setGateDocuments({});
         try { if (popup && !popup.closed) popup.location.replace(result.whatsappUrl); } catch { popup?.close(); }
         setNotice("Gate pass saved. Press Send in WhatsApp. If it did not open, use the WhatsApp icon below. Reissuing an active pass preserves its QR and expiry.");
       } catch (e) { popup?.close(); throw e; }
@@ -429,7 +449,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
     let billTokens: Record<string, string | null>;
     try {
       billTokens = Object.fromEntries(preview.map(b => [b.id, tokenNumber(tokens[b.id] ?? b.token_number)]));
-      if (requireToken && Object.values(billTokens).some(token => !token)) throw new Error("Token number is required for every bill at this branch");
     } catch (e) { setNotice((e as Error).message); return; }
     if (!feedback.begin("Submitting bills…", pending.reduce((n, f) => n + f.bills.length, 0), "inline")) return;
     batchLock.current = true; refreshVersion.current++; setBatchBusy(true);
@@ -584,9 +603,9 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   const daily = profile.role === "cashier" ? cashierDailyReport(visible, analyticsDay) : null;
   const selected = preview.find(b => b.id === selectedId) ?? data.bills.find(b => b.id === selectedId);
   const person = (id: string | null) => data.staff.find(p => p.id === id)?.full_name ?? (id ? "Staff member" : "Deleted staff account");
-  const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : isSupportingNote(b) ? "No collection required" : isPaid(b, data.payments) ? "Paid in full" : profile.role === "cashier" ? "In progress" : b.approval_status !== "approved" ? "Awaiting approval" : "Unpaid";
-  const list = profile.role === "cashier" ? visible.bills.filter(b => cashierView(b, data.payments) === tab) : tab === "bills" || profile.role === "service_advisor" ? visible.bills : summary[metric];
-  const matches = (b: DeskBill) => (!customerFilter || (b.customer_id || customerKey(b)) === customerFilter) && [b.token_number,b.customer_name,b.customer_reference,b.vehicle_no_display,b.vin,b.invoice_reference,b.job_card_reference,billType(b),b.field_confidence?.document?.billedTo].some(v => v?.toLowerCase().includes(query.toLowerCase()));
+  const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : settlementStatus(b, data.payments);
+  const list = profile.role === "cashier" ? cashierRows(visible, tab, analyticsDay, query) : tab === "bills" || profile.role === "service_advisor" ? visible.bills : summary[metric];
+  const matches = (b: DeskBill) => (!customerFilter || (b.customer_id || customerKey(b)) === customerFilter) && [b.token_number,b.customer_name,b.customer_reference,b.vehicle_no_display,b.vin,b.invoice_reference,b.job_card_reference,billType(b),b.field_confidence?.document?.billedTo].some(v => v?.toLowerCase().includes(query.trim().toLowerCase()));
   const rows = [...new Map(list.filter(matches).map(b => [b.id,b])).values()];
   if (profile.role === "cashier") rows.sort(compareCashierTokens);
   const customerGroups = groupCustomers(rows);
@@ -595,12 +614,13 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
   return <div className="sd-app"><OperationDialog operation={feedback.operation} onDismiss={feedback.dismiss}/>
     <aside className="sd-sidebar"><Brand/><span className="sd-eyebrow">{labels[profile.role]} WORKSPACE</span><nav>
       <button aria-current={tab === "overview" ? "page" : undefined} onClick={() => { setTab("overview"); setQuery(""); setCustomerFilter(null); }}><LayoutDashboard size={19}/>{profile.role === "service_advisor" ? "Upload & my bills" : "Overview"}</button>
-      <button aria-current={tab === (profile.role === "cashier" ? "archive" : "bills") ? "page" : undefined} onClick={() => { setTab(profile.role === "cashier" ? "archive" : "bills"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>{profile.role === "cashier" ? "Archive" : "Bill archive"}<span>{profile.role === "cashier" ? visible.bills.filter(b => cashierView(b, data.payments) === "archive").length : visible.bills.length}</span></button>
+      <button aria-current={tab === (profile.role === "cashier" ? "archive" : "bills") ? "page" : undefined} onClick={() => { setTab(profile.role === "cashier" ? "archive" : "bills"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>{profile.role === "cashier" ? "Archive" : "Bill archive"}<span>{profile.role === "cashier" ? cashierRows(visible, "archive", analyticsDay, "").length : visible.bills.length}</span></button>
+      {profile.role === "cashier" && <button aria-current={tab === "receivables" ? "page" : undefined} onClick={() => { setTab("receivables"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>Receivables<span>{cashierRows(visible, "receivables", analyticsDay, "").length}</span></button>}
       {profile.role === "super_admin" && <><button aria-current={tab === "staff" ? "page" : undefined} onClick={() => setTab("staff")}><Users size={19}/>Staff accounts</button><button aria-current={tab === "activity" ? "page" : undefined} onClick={() => setTab("activity")}><ShieldCheck size={19}/>Activity log</button></>}
     </nav><div className="sd-sidebar-bottom"><span className="sd-retained"><ShieldCheck size={18}/>Permanent bill history</span><strong>{profile.full_name}</strong><small>{profile.staff_id} · {labels[profile.role]}</small><button className="sd-plain" disabled={busy || Boolean(authTransition)} onClick={() => void logout()}><LogOut size={16}/>Sign out</button></div></aside>
     <main className="sd-main"><OperationStatus operation={feedback.operation}/>
       {demo && <div className="sd-demo-banner">LOCAL PDF WORKSPACE <span>Supplied PDFs and local uploads · no Supabase connection</span></div>}
-      <header className="sd-header"><div><span className="sd-eyebrow">BILLDESK / {labels[profile.role].toUpperCase()}</span><h1>{tab === "staff" ? "Your people. Their access." : tab === "activity" ? "A record of every action." : tab === "archive" ? "Archive" : tab === "bills" ? "The bill archive." : profile.role === "service_advisor" ? "Send bills to the counter." : "Overview"}</h1><p>{profile.role === "service_advisor" ? "Choose a PDF. Amounts and details are read automatically." : profile.role === "cashier" ? tab === "archive" ? "Paid bills and supporting documents." : "Review pending bills and mark them as paid to move them to Archive." : "Track paid bills, unpaid bills, and bills awaiting approval."}</p></div><button className="sd-secondary" disabled={busy} onClick={() => void perform(refreshStatus)}>Refresh</button></header>
+      <header className="sd-header"><div><span className="sd-eyebrow">BILLDESK / {labels[profile.role].toUpperCase()}</span><h1>{tab === "staff" ? "Your people. Their access." : tab === "activity" ? "A record of every action." : tab === "archive" ? "Archive" : tab === "receivables" ? "Receivables" : tab === "bills" ? "The bill archive." : profile.role === "service_advisor" ? "Send bills to the counter." : "Overview"}</h1><p>{profile.role === "service_advisor" ? "Choose a PDF. Amounts and details are read automatically." : profile.role === "cashier" ? tab === "archive" ? "Paid bills and supporting documents." : tab === "receivables" ? "Collect outstanding insurance and credit balances, and record follow-ups." : "Today’s submissions. Search to find bills from any date." : "Track paid bills, unpaid bills, and bills awaiting approval."}</p></div><button className="sd-secondary" disabled={busy} onClick={() => void perform(refreshStatus)}>Refresh</button></header>
       {(refreshError || needsRefresh) && <div className="sd-notice" role="alert">{needsRefresh ? "Result uncertain. Refresh status before retrying." : refreshError}<button disabled={busy} onClick={() => void perform(refreshStatus)}>Retry refresh</button></div>}
       {notice && <div className="sd-notice" role="status">{notice.includes("WhatsApp") && <WhatsAppIcon/>}{notice}<button aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}
       {tab === "staff" && profile.role === "super_admin" ? <section className="sd-panel">
@@ -608,14 +628,15 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
           <label>Full name<input disabled={busy} name="fullName" maxLength={100} required/></label><label>User ID<input disabled={busy} name="staffId" autoComplete="off" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Password<input disabled={busy} name="password" type="password" minLength={6} maxLength={8} placeholder="6–8 characters" autoComplete="new-password" required/></label><label>Role<select disabled={busy} name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option><option value="security">Security</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
         </form>{staffPassword && <div className="sd-alert"><strong>Share privately; shown for this session only.</strong><p><code>{staffPassword}</code></p><button onClick={() => setStaffPassword("")}>Dismiss</button></div>}
         <div className="sd-table-wrap"><table><thead><tr><th>Name / User ID</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{data.staff.map(p => <tr key={p.id}><td><strong>{p.full_name}</strong><small>{p.staff_id}</small></td><td>{labels[p.role]}</td><td>{p.active ? "Active" : "Disabled"}{p.must_change_password ? " · Temporary password" : ""}</td><td>{p.id !== profile.id && <div className="sd-actions"><button disabled={busy} onClick={() => void action({ action: "reset_staff", target: p.id })}>Reset password</button><button disabled={busy} onClick={() => void action({ action: "toggle_staff", target: p.id, active: !p.active })}>{p.active ? "Disable" : "Enable"}</button>{p.staff_id !== "admin01" && <button className="sd-danger" disabled={busy} onClick={() => { if (window.confirm(`Permanently delete ${p.full_name} (${p.staff_id})? Their account and access will be removed. Bill and collection history will be retained.`)) void action({ action: "delete_staff", target: p.id }); }}><Trash2 size={16}/>Delete account</button>}</div>}</td></tr>)}</tbody></table></div>
-      </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
+      </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}{settlementAudit(a.detail) ? " · " + settlementAudit(a.detail) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
         {profile.role === "service_advisor" && <><div className="sd-upload-launch"><button className="sd-primary" onClick={() => setUploadOpen(true)}><Upload size={18}/>Upload bills{files.length ? ` (${files.length})` : ""}</button></div></>}
         {daily && tab === "overview" && <section aria-label="Daily analytics">
-          <div className="sd-filters"><label>Analytics date<input type="date" value={analyticsDay} onChange={e => setAnalyticsDay(e.target.value || indiaDate())}/></label><button className="sd-plain" onClick={() => setAnalyticsDay(indiaDate())}>Today</button><small>By invoice date · current payment status · INR</small></div>
+          <div className="sd-filters"><label>Submission date<input type="date" value={analyticsDay} onChange={e => setAnalyticsDay(e.target.value || indiaDate())}/></label><button className="sd-plain" onClick={() => setAnalyticsDay(indiaDate())}>Today</button><small>By submission date · current balances · INR</small></div>
           <div className="sd-metrics sd-daily-metrics" aria-live="polite">
             <div className="sd-metric"><span>Total amount billed</span><strong>{money(daily.billedAmount)}</strong><small>{daily.bills} bill{daily.bills === 1 ? "" : "s"}</small></div>
-            <div className="sd-metric"><span>Total paid bills</span><strong>{daily.paid}</strong><small>{money(daily.paidAmount)} paid</small></div>
-            <div className="sd-metric"><span>Total unpaid bills</span><strong>{daily.unpaid}</strong><small>{money(daily.unpaidAmount)} unpaid</small></div>
+            <div className="sd-metric"><span>Total paid bills</span><strong>{daily.paid}</strong><small>{money(daily.paidAmount)} paid in full</small></div>
+            <div className="sd-metric"><span>Collected on these bills</span><strong>{money(daily.collectedAmount)}</strong><small>Actual receipts, including part payments</small></div>
+            <div className="sd-metric"><span>Total unpaid bills</span><strong>{daily.unpaid}</strong><small>{money(daily.unpaidAmount)} outstanding</small></div>
           </div>
           {daily.unreadAmounts > 0 && <p className="sd-warning">{daily.unreadAmounts} bill{daily.unreadAmounts === 1 ? " has" : "s have"} unread amounts and {daily.unreadAmounts === 1 ? "is" : "are"} counted above but excluded from monetary totals.</p>}
         </section>}
@@ -624,11 +645,11 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
           <div className="sd-metrics" aria-live="polite">{(["paid","unpaid","pending"] as Metric[]).map(m => <button key={m} aria-pressed={metric === m} className={"sd-metric " + (metric === m ? "is-selected" : "")} onClick={() => { setMetric(m); setQuery(""); setCustomerFilter(null); }}><span>{metricNames[m]}<ArrowUpRight size={18}/></span><strong>{summary[m].length}</strong><small>{m === "paid" ? money(summary.paidAmount) + " paid" : m === "unpaid" ? money(summary.unpaidAmount) + " unpaid · includes awaiting approval" : "Waiting for cashier approval"}</small></button>)}</div>
           {summary.unreadAmounts > 0 && <p className="sd-warning">{summary.unreadAmounts} bill{summary.unreadAmounts === 1 ? " has" : "s have"} unread amounts and {summary.unreadAmounts === 1 ? "is" : "are"} counted above but excluded from monetary totals.</p>}
         </>}
-        {customerFilter && <div className="sd-notice">Showing bills for one customer in this view.<button onClick={() => setCustomerFilter(null)}>Show all customers <X size={14}/></button></div>}<section className="sd-panel sd-ledger"><div className="sd-section-heading"><div><span className="sd-eyebrow">{tab === "bills" ? "ALL DATES · PERMANENT RECORDS" : "ALL DATES"}</span><h2>{profile.role === "service_advisor" ? "My bills" : tab === "archive" ? "Archive" : tab === "bills" ? "All bills" : profile.role === "cashier" ? "Pending bills" : metricNames[metric]}</h2></div><label className="sd-search"><Search size={18}/><input aria-label="Search bills" placeholder="Token, name, vehicle, VIN or invoice" value={query} onChange={e => setQuery(e.target.value)}/></label></div>
-          <div className="sd-table-wrap"><table><thead><tr><th>Invoice / Customer</th><th>Token no.</th><th>Vehicle</th><th>Invoice date</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>
-            {profile.role === "cashier" ? rows.map(b => <BillRow key={b.id} bill={b} state={billState(b)} uploader={person(b.uploaded_by)} onSelect={selectBill}/>) : customerGroups.map(group => <Fragment key={group.id}><tr className="sd-customer-group"><td colSpan={7}><button onClick={() => setCustomerFilter(group.id)}><Users size={16}/><strong>{group.name}</strong><span>{group.reference ? "Customer ID " + group.reference : "Matched by name + vehicle, or kept separate"}</span><b>{group.bills.length} bill{group.bills.length === 1 ? "" : "s"} · {group.bills.some(b => b.amount_paise !== null) ? money(group.total) : "No amount stated"}{group.missingAmounts > 0 ? " + unread totals" : ""}</b></button></td></tr>{group.bills.map(b => <BillRow key={b.id} bill={b} state={billState(b)} uploader={person(b.uploaded_by)} onSelect={selectBill}/>)}</Fragment>)}
+        {customerFilter && <div className="sd-notice">Showing bills for one customer in this view.<button onClick={() => setCustomerFilter(null)}>Show all customers <X size={14}/></button></div>}<section className="sd-panel sd-ledger"><div className="sd-section-heading"><div><span className="sd-eyebrow">{profile.role === "cashier" && tab === "overview" && !query.trim() ? "SUBMITTED " + analyticsDay : query.trim() && profile.role === "cashier" ? "SEARCH · ALL DATES" : tab === "bills" ? "ALL DATES · PERMANENT RECORDS" : "ALL DATES"}</span><h2>{profile.role === "service_advisor" ? "My bills" : tab === "archive" ? "Archive" : tab === "receivables" ? "Receivables" : tab === "bills" ? "All bills" : profile.role === "cashier" ? "Pending bills" : metricNames[metric]}</h2></div><label className="sd-search"><Search size={18}/><input aria-label="Search bills" placeholder="Token, name, vehicle, VIN or invoice" value={query} onChange={e => setQuery(e.target.value)}/></label></div>
+          <div className="sd-table-wrap"><table><thead><tr><th>Invoice / Customer</th><th>Token no.</th><th>Vehicle</th><th>Invoice / submitted</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>
+            {profile.role === "cashier" ? rows.map(b => <BillRow key={b.id} bill={b} state={billState(b)} outstanding={balance(b, data.payments)} uploader={person(b.uploaded_by)} onSelect={selectBill}/>) : customerGroups.map(group => <Fragment key={group.id}><tr className="sd-customer-group"><td colSpan={7}><button onClick={() => setCustomerFilter(group.id)}><Users size={16}/><strong>{group.name}</strong><span>{group.reference ? "Customer ID " + group.reference : "Matched by name + vehicle, or kept separate"}</span><b>{group.bills.length} bill{group.bills.length === 1 ? "" : "s"} · {group.bills.some(b => b.amount_paise !== null) ? money(group.total) : "No amount stated"}{group.missingAmounts > 0 ? " + unread totals" : ""}</b></button></td></tr>{group.bills.map(b => <BillRow key={b.id} bill={b} state={billState(b)} outstanding={balance(b, data.payments)} uploader={person(b.uploaded_by)} onSelect={selectBill}/>)}</Fragment>)}
           </tbody></table></div>
-          {!rows.length && <div className="sd-empty"><FileText size={30}/><h3>No bills in this view.</h3><p>{profile.role === "service_advisor" ? "Upload a PDF to send your first bill to the cashier." : profile.role === "cashier" ? query ? "Try a different search." : tab === "overview" ? "All submitted bills have been handled." : "Paid bills will appear here." : "Try another bill status, advisor, or search."}</p></div>}
+          {!rows.length && <div className="sd-empty"><FileText size={30}/><h3>No bills in this view.</h3><p>{profile.role === "service_advisor" ? "Upload a PDF to send your first bill to the cashier." : profile.role === "cashier" ? query ? "Try a different search." : tab === "overview" ? "No pending submissions for this day. Search to find an earlier bill." : tab === "receivables" ? "Outstanding credit and insurance balances will appear here." : "Paid bills will appear here." : "Try another bill status, advisor, or search."}</p></div>}
           <footer className="sd-ledger-footer"><span>{rows.length} matching bill{rows.length === 1 ? "" : "s"}{tab === "bills" ? " · " + money(rows.reduce((sum,b) => sum+(b.amount_paise ?? 0),0)) + " extracted total" : ""}{query ? " · search filters rows only" : ""}</span><span>Snapshot {data.as_of ? dateTime(data.as_of) : "—"}</span></footer>
         </section>
       </>}
@@ -656,7 +677,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
           <div className="sd-review-heading"><div><small>Invoice</small><h3 className="sd-review-reference">{b.invoice_reference || "Invoice number not read"}</h3></div><div className="sd-review-amount"><small>Bill amount</small><strong>{billAmount(b)}</strong></div></div>
           <div className="sd-review-customer"><small>Customer</small><strong>{b.customer_name || "Customer not read"}</strong></div>
           <dl className="sd-review-fields"><div><dt>Vehicle</dt><dd>{b.vehicle_no_display || "Vehicle not read"}</dd></div><div><dt>Invoice date</dt><dd>{b.invoice_date || "Date not read"}</dd></div></dl>
-          <label>Token number ({requireToken ? "required" : "optional"})<input required={requireToken} value={tokens[b.id] ?? b.token_number ?? ""} onChange={e => setTokens(current => ({ ...current, [b.id]: e.target.value }))} maxLength={30} placeholder="Enter token from your token machine" disabled={batchBusy || busy}/></label>
+          <label>Token number (optional)<input value={tokens[b.id] ?? b.token_number ?? ""} onChange={e => setTokens(current => ({ ...current, [b.id]: e.target.value }))} maxLength={30} placeholder="Enter token from your token machine" disabled={batchBusy || busy}/></label>
           <small className="sd-review-evidence">{b.amount_evidence}</small>
           {b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
           <div className="sd-actions"><button onClick={() => { setSelectedId(b.id); void openPdf(b); }}><Eye size={16}/>View bill</button><button className="sd-danger" disabled={batchBusy || busy} onClick={() => void deleteBill(b)}><Trash2 size={16}/>Delete draft</button></div>
@@ -671,20 +692,22 @@ export function ServiceDesk({ demo, ready, initial, initialError = "", requireTo
       {pdfUrl && <div className="sd-pdf"><a href={pdfUrl + "#page=" + selected.page_from} target="_blank" rel="noreferrer">Open original PDF in a new tab to print ↗</a><iframe onLoad={() => { performance.measure("pdf-display", pdfDisplayStart.current); setPdfLoading(false); }} title="Original bill PDF" src={pdfUrl + "#page=" + selected.page_from}/></div>}
       <div className="sd-detail-totals sd-full-total"><div><small>Service bill amount · from PDF</small><strong>{billAmount(selected)}</strong></div><span className={"sd-status " + (isSupportingNote(selected) ? "is-note" : isPaid(selected,data.payments) ? "is-paid" : "")}>{billState(selected)}</span></div>
       <dl className="sd-details"><div><dt>Token number</dt><dd>{selected.token_number || "Not assigned"}</dd></div><div><dt>Original file</dt><dd>{selected.uploads?.original_filename || "—"}</dd></div><div><dt>Document type</dt><dd>{billType(selected)}</dd></div><div><dt>Job / repair reference</dt><dd>{selected.job_card_reference || "Not read"}</dd></div><div><dt>Customer ID from PDF</dt><dd>{selected.customer_reference || "Not stated / not read"}</dd></div><div><dt>Customer / vehicle owner</dt><dd>{selected.customer_name || "Not read"}</dd></div><div><dt>Billed to</dt><dd>{selected.field_confidence?.document?.billedTo || selected.customer_name || "Not read"}</dd></div><div><dt>Invoice date</dt><dd>{selected.invoice_date || "Not read"}</dd></div><div><dt>VIN</dt><dd>{selected.vin || "Not read"}</dd></div><div><dt>Uploaded by</dt><dd>{selected.reference_file ? "Local PDF import" : person(selected.uploaded_by)}</dd></div><div><dt>Approved by</dt><dd>{selected.approval_status === "approved" ? person(selected.approved_by) : isSupportingNote(selected) ? "Supporting note — no collection" : "Awaiting cashier"}</dd></div><div><dt>PDF pages</dt><dd>{selected.page_from}–{selected.page_to}</dd></div><div><dt>Status</dt><dd>{billState(selected)}</dd></div></dl>
-      <div className="sd-extraction"><strong>Read directly from PDF</strong><p>{selected.amount_evidence || "No readable total found"}</p>{selected.field_confidence?.document?.typeEvidence && <p>{selected.field_confidence.document.typeEvidence}</p>}<small>{isSupportingNote(selected) ? "Supporting service note. No monetary total is stated; this document is retained with the customer’s bills and excluded from financial totals." : "Financial values cannot be entered or edited manually."}</small></div>
+      <div className="sd-extraction"><strong>Read directly from PDF</strong><p>{selected.amount_evidence || "No readable total found"}</p>{selected.field_confidence?.document?.typeEvidence && <p>{selected.field_confidence.document.typeEvidence}</p>}<small>{isSupportingNote(selected) ? "Supporting service note. No monetary total is stated; this document is retained with the customer’s bills and excluded from financial totals." : "Invoice totals come from the PDF. Collections and approved arrangements are recorded separately."}</small></div>
       {selected.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
-      {profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <label>Token number ({requireToken ? "required" : "optional"})<input required={requireToken} value={tokens[selected.id] ?? selected.token_number ?? ""} onChange={e => setTokens(current => ({ ...current, [selected.id]: e.target.value }))} maxLength={30} placeholder="Enter token from your token machine" disabled={batchBusy || busy}/></label>}
+      {profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <label>Token number (optional)<input value={tokens[selected.id] ?? selected.token_number ?? ""} onChange={e => setTokens(current => ({ ...current, [selected.id]: e.target.value }))} maxLength={30} placeholder="Enter token from your token machine" disabled={batchBusy || busy}/></label>}
       <div className="sd-actions"><button className="sd-secondary" disabled={pdfLoading} onClick={() => void openPdf(selected)}><FileText size={16}/>View original PDF</button>
         {profile.role === "service_advisor" && !selected.uploads?.confirmed_at && <button className="sd-primary" disabled={busy || batchBusy} onClick={() => void submit()}>{submitLabel(files.filter(f => f.state === "ready"))}</button>}
         {profile.role === "service_advisor" && selected.uploaded_by === profile.id && !selected.uploads?.confirmed_at && selected.approval_status === "pending" && <button className="sd-danger" disabled={busy || batchBusy} onClick={() => void deleteBill(selected)}><Trash2 size={16}/>Delete bill</button>}
         {!demo && profile.role === "super_admin" && selected.approval_status === "pending" && selected.amount_paise === null && !isSupportingNote(selected) && <button disabled={busy} onClick={() => void action({action:"reextract",target:selected.id})}>Re-read original PDF</button>}
       </div>
-      {profile.role === "cashier" && selected.uploads?.confirmed_at && !isSupportingNote(selected) && !isPaid(selected,data.payments) && <PaymentForm key={selected.id} bill={selected} busy={busy} onConfirm={(method, otherMethod, transactionId) => void action({ action: "collect", target: selected.id, method, otherMethod, transactionId })}/>}
-      {profile.role === "cashier" && selected.uploads?.confirmed_at && (isPaid(selected, data.payments) || isSupportingNote(selected)) && <section className="sd-related"><h3>Vehicle gate pass</h3><p>All submitted bills for this customer and vehicle must be cleared.</p><label><span className="sd-whatsapp-label"><WhatsAppIcon/>Customer WhatsApp number</span><input type="tel" autoComplete="off" placeholder="Enter customer WhatsApp number" maxLength={40} disabled={busy} value={phoneFor(selected)} onChange={e => { setPhones(current => ({ ...current, [selected.id]: e.target.value })); setGateLinks(current => ({ ...current, [selected.id]: "" })); }}/></label><div className="sd-actions"><button className="sd-primary" disabled={demo || busy} onClick={() => issueGatePass(selected)}><WhatsAppIcon/>Issue gate pass</button>{gateLinks[selected.id] && <a className="sd-whatsapp-action" href={gateLinks[selected.id]} target="_blank" rel="noreferrer" aria-label="Open gate pass in WhatsApp"><WhatsAppIcon/></a>}</div></section>}
-      <h3>Full-bill collection history</h3>{data.payments.filter(p => p.bill_id === selected.id && !p.is_archived).map(p => <div className="sd-payment" key={p.id}><div><strong>{money(p.amount_paise)}</strong><small>{dateTime(p.occurred_at)} · {person(p.recorded_by)} · {p.method} · {p.source !== "reversal" ? "Full bill collected" : "Full collection reversed"}</small>{p.transaction_id && <small>{paymentReferenceLabel(p.method) || "Transaction ID"}: {p.transaction_id}</small>}{p.reason && <p>{p.reason}</p>}</div>{profile.role === "super_admin" && p.source !== "reversal" && !data.payments.some(r => r.reversal_of === p.id) && <button disabled={busy} onClick={() => { const reason = window.prompt("Why is this payment entry incorrect? This is a correction, not a customer refund."); if (reason) void action({ action: "reverse", target: p.id, reason }); }}>Reverse entry</button>}</div>)}
+      {["cashier", "super_admin"].includes(profile.role) && selected.uploads?.confirmed_at && !isSupportingNote(selected) && <SettlementPanel key={selected.id} bill={selected} snapshot={data} actor={profile} busy={busy || needsRefresh} onSubmit={action}/>}
+      {profile.role === "cashier" && selected.amount_paise === 0 && !isPaid(selected, data.payments) && <button disabled={busy} onClick={() => void action({ action: "collect", target: selected.id, method: "Cash" })}>Clear zero-value invoice</button>}
+      {profile.role === "cashier" && selected.uploads?.confirmed_at && !selected.gate_completed && releaseCleared(selected, data.payments) && <section className="sd-related"><h3>Vehicle gate pass</h3><p>All submitted bills for this customer and vehicle must be paid or covered by a recorded release arrangement.</p>{sameVehicleBills(selected, data.bills).filter(b => !b.gate_completed).map(b => <div className="sd-gate-fields" key={b.id}><label>R.O./W.O. No. · {b.invoice_reference}<input maxLength={100} disabled={busy} value={gateDocuments[b.id]?.jobNumber ?? b.job_card_reference ?? ""} onChange={e => setGateDocuments(current => ({ ...current, [b.id]: { jobNumber: e.target.value, jobDate: current[b.id]?.jobDate || "" } }))}/></label><label>R.O./W.O. date<input type="date" disabled={busy} value={gateDocuments[b.id]?.jobDate || ""} onChange={e => setGateDocuments(current => ({ ...current, [b.id]: { jobNumber: current[b.id]?.jobNumber ?? b.job_card_reference ?? "", jobDate: e.target.value } }))}/></label></div>)}<label><span className="sd-whatsapp-label"><WhatsAppIcon/>Customer WhatsApp number</span><input type="tel" autoComplete="off" placeholder="Enter customer WhatsApp number" maxLength={40} disabled={busy} value={phoneFor(selected)} onChange={e => { setPhones(current => ({ ...current, [selected.id]: e.target.value })); setGateLinks(current => ({ ...current, [selected.id]: "" })); }}/></label><div className="sd-actions"><button className="sd-primary" disabled={demo || busy} onClick={() => issueGatePass(selected)}><WhatsAppIcon/>Issue gate pass</button>{gatePages[selected.id] && <a className="sd-secondary" href={gatePages[selected.id]} target="_blank" rel="noreferrer">View / print gate pass</a>}{gateLinks[selected.id] && <a className="sd-whatsapp-action" href={gateLinks[selected.id]} target="_blank" rel="noreferrer" aria-label="Open gate pass in WhatsApp"><WhatsAppIcon/></a>}</div></section>}
+      {selected.gate_completed && <p className="sd-muted">Vehicle exit already recorded for this bill.</p>}
+      <h3>Collection history</h3>{data.payments.filter(p => p.bill_id === selected.id && !p.is_archived).map(p => <div className="sd-payment" key={p.id}><div><strong>{money(p.amount_paise)}</strong><small>{dateTime(p.occurred_at)} · {person(p.recorded_by)} · {p.method} · {p.source !== "reversal" ? (p.payer === "insurer" ? "Insurer collection" : "Customer collection") : "Collection reversed"}</small>{p.transaction_id && <small>{paymentReferenceLabel(p.method) || "Transaction ID"}: {p.transaction_id}</small>}{p.collection_id && <small>Collection: {p.collection_id}</small>}{p.reason && <p>{p.reason}</p>}</div>{profile.role === "super_admin" && p.source !== "reversal" && !data.payments.some(r => r.reversal_of === p.id) && <button disabled={busy} onClick={() => { const reason = window.prompt("Why is this payment entry incorrect? This is a correction, not a customer refund."); if (reason) void action({ action: "reverse", target: p.id, reason }); }}>Reverse entry</button>}</div>)}
       {!isSupportingNote(selected) && !data.payments.some(p => p.bill_id === selected.id && !p.is_archived) && <p className="sd-muted">No collection recorded. An invoice alone does not confirm payment.</p>}
       {selectedGroup && <section className="sd-related"><h3>This customer’s bills</h3><p>{selectedGroup.name}{selectedGroup.reference ? " · Customer ID " + selectedGroup.reference : ""}</p><strong>{selectedGroup.bills.length} bill{selectedGroup.bills.length === 1 ? "" : "s"} · {selectedGroup.bills.some(b => b.amount_paise !== null) ? money(selectedGroup.total) + " stated invoice value" : "No monetary total stated"}{selectedGroup.missingAmounts > 0 ? " (some totals unread)" : ""}</strong><small>All accessible bills, including those awaiting approval.</small>{selectedGroup.bills.map(b => <button key={b.id} aria-current={b.id === selected.id ? "true" : undefined} onClick={() => { selectBill(b.id); }}><span>{b.invoice_reference || "Invoice not read"}<small>{billType(b)}</small><small>{b.invoice_date || "Date not read"} · {b.vehicle_no_display || "Vehicle not read"}</small></span><strong>{billAmount(b)}</strong><ChevronRight size={15}/></button>)}</section>}
-      <h3>Bill timeline</h3>{data.audit.filter(a => a.bill_id === selected.id).map(a => <div className="sd-audit-row" key={a.id}><Check size={16}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}</small></div></div>)}
+      <h3>Bill timeline</h3>{data.audit.filter(a => a.bill_id === selected.id).map(a => <div className="sd-audit-row" key={a.id}><Check size={16}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}{settlementAudit(a.detail) ? " · " + settlementAudit(a.detail) : ""}</small></div></div>)}
       {refreshError && <p className="sd-warning" role="alert">{refreshError}</p>}
       {(needsRefresh || refreshError) && <button disabled={busy} onClick={() => void perform(refreshStatus)}>Refresh status</button>}
       {notice && <p className="sd-alert" role="status">{notice.includes("WhatsApp") && <WhatsAppIcon/>}{notice}</p>}
@@ -707,21 +730,6 @@ function UploadDialog({ onClose, children, footer }: { onClose: () => void; chil
   return <DeskDialog title="Upload bills" label="Upload and review bills" closeLabel="Close upload dialog" onClose={onClose} footer={footer} upload>{children}</DeskDialog>;
 }
 
-function BillRow({ bill: b, state, uploader, onSelect }: { bill: DeskBill; state: string; uploader: string; onSelect: (id: string) => void }) {
-  return <tr key={b.id}><td><button className="sd-invoice" onClick={() => { onSelect(b.id); }}>{b.invoice_reference || "Needs readable invoice"}</button><small>{b.customer_name || "Billed party not read"}</small><small className="sd-bill-type">{billType(b)}</small><small>{b.uploads?.original_filename}</small></td><td><strong>{b.token_number || "—"}</strong></td><td>{b.vehicle_no_display || "Not read"}<small>{b.reference_file ? "Local PDF import" : uploader}</small></td><td>{b.invoice_date || "Not read"}</td><td className="sd-money">{billAmount(b)}</td><td><span className={"sd-status " + (isSupportingNote(b) ? "is-note" : state === "Paid in full" ? "is-paid" : "")}>{state}</span></td><td><button aria-label="Open invoice" onClick={() => { onSelect(b.id); }}><ChevronRight size={16}/></button></td></tr>;
-}
-
-function PaymentForm({ bill, busy, onConfirm }: { bill: DeskBill; busy: boolean; onConfirm: (method: string, otherMethod: string, transactionId: string) => void }) {
-  const [method, setMethod] = useState("");
-  const [otherMethod, setOtherMethod] = useState("");
-  const [transactionId, setTransactionId] = useState("");
-  const referenceLabel = paymentReferenceLabel(method);
-  return <form className="sd-payment-form" onSubmit={e => { e.preventDefault(); onConfirm(method, otherMethod, referenceLabel ? transactionId : ""); }}>
-    <label>Mode of payment<select required value={method} disabled={busy} onChange={e => { setMethod(e.target.value); setOtherMethod(""); setTransactionId(""); }}>
-      <option value="" disabled>Select payment method</option>{paymentMethods.map(value => <option key={value} value={value}>{value}</option>)}
-    </select></label>
-    {method === "Other" && <label>Specify other payment method<input required maxLength={100} value={otherMethod} disabled={busy} onChange={e => setOtherMethod(e.target.value)} placeholder="Enter payment method"/></label>}
-    {referenceLabel && <label>{referenceLabel} (required)<input required maxLength={100} value={transactionId} disabled={busy} onChange={e => setTransactionId(e.target.value)} placeholder={"Enter " + referenceLabel.toLowerCase()}/></label>}
-    <button className="sd-primary" disabled={busy || !method || Boolean(referenceLabel && !transactionId.trim()) || (method === "Other" && !otherMethod.trim()) || bill.amount_paise === null || !bill.invoice_date || !bill.invoice_reference?.trim()}>Mark as paid · {money(bill.amount_paise)} <Check size={16}/></button>
-  </form>;
+function BillRow({ bill: b, state, outstanding, uploader, onSelect }: { bill: DeskBill; state: string; outstanding?: number | null; uploader: string; onSelect: (id: string) => void }) {
+  return <tr key={b.id}><td><button className="sd-invoice" onClick={() => { onSelect(b.id); }}>{b.invoice_reference || "Needs readable invoice"}</button><small>{b.customer_name || "Billed party not read"}</small><small className="sd-bill-type">{billType(b)}</small><small>{b.uploads?.original_filename}</small></td><td><strong>{b.token_number || "—"}</strong></td><td>{b.vehicle_no_display || "Not read"}<small>{b.reference_file ? "Local PDF import" : uploader}</small></td><td>{b.invoice_date || "Not read"}<small>Submitted {submittedDay(b) || "—"}</small></td><td className="sd-money">{billAmount(b)}{outstanding !== null && outstanding !== undefined && outstanding > 0 && <small>{money(outstanding)} outstanding</small>}</td><td><span className={"sd-status " + (isSupportingNote(b) ? "is-note" : state === "Paid in full" ? "is-paid" : b.settlement?.kind === "credit" ? "is-credit" : b.settlement?.kind === "insurance" ? "is-insurance" : "")}>{state}</span></td><td><button aria-label="Open invoice" onClick={() => { onSelect(b.id); }}><ChevronRight size={16}/></button></td></tr>;
 }

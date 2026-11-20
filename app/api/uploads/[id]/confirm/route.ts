@@ -22,7 +22,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const contacts = Object.fromEntries(bills.map(bill => [bill.id, { phone: null, skipWhatsApp: true }]));
     const { data, error } = await service.rpc("app_confirm_upload", {
       staff: user.id, target: id, tokens: normalizedTokens, contacts,
-      require_token: process.env.BILLDESK_REQUIRE_TOKEN === "true",
+      require_token: false,
     }).single();
     if (error) {
       if (error.code === "23505" && error.message.includes("uploads_confirmed_hash_unique")) {
