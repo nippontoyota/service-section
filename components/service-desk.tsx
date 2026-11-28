@@ -84,6 +84,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   const [batchBusy, setBatchBusy] = useState(false);
   const batchLock = useRef(false);
   const refreshVersion = useRef(0);
+  const lastRefresh = useRef(0);
   const links = useRef(new PdfLinks());
   const localUrls = useRef(new Map<string, string>());
   const pdfRequest = useRef(0);
@@ -100,6 +101,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     setPdfUrl(""); setPdfError(""); setPdfLoading(false); setPaymentForm(null);
   }, []);
   const acceptSnapshot = useCallback((snapshot: Snapshot, user: Staff | null) => {
+    lastRefresh.current = Date.now();
     setData(snapshot); setProfile(user); setRestoring(false); setRefreshError("");
     if (user?.id !== profileId.current) {
       clearPreviews(); setFiles([]); setSelectedId(null); setUploadOpen(false);
@@ -168,12 +170,26 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     }
   }, [demo, ready, acceptSnapshot, clearPreviews]);
   useEffect(() => {
-    const listener = () => { const today = indiaDate(); if (today !== previousToday.current) { const yesterday = previousToday.current; setAnalyticsDay(current => current === yesterday ? today : current); previousToday.current = today; } if (!authLock.current && !batchLock.current && !feedback.lock.current && !uncertain.current) void refresh().catch(e => { setNotice(e.message); setRefreshError(e.message); }); };
-    const timer = window.setInterval(listener, 30000);
-    window.addEventListener("storage", listener);
-    if (initialFetch.current) { initialFetch.current = false; listener(); }
-    return () => { window.removeEventListener("storage", listener); window.clearInterval(timer); };
-  }, [refresh, feedback.lock]);
+    let refreshing = false;
+    const listener = (initial = false) => {
+      const today = indiaDate();
+      if (today !== previousToday.current) { const yesterday = previousToday.current; setAnalyticsDay(current => current === yesterday ? today : current); previousToday.current = today; }
+      if (refreshing || authLock.current || batchLock.current || feedback.lock.current || uncertain.current) return;
+      if (!initial && (!profile || profile.must_change_password || document.hidden || document.querySelector('dialog[open]') || Date.now() - lastRefresh.current < 60000)) return;
+      refreshing = true;
+      void refresh().catch(e => { setNotice(e.message); setRefreshError(e.message); }).finally(() => { refreshing = false; });
+    };
+    // Demo tabs share local data; storage notifications do not need an API call.
+    const storage = (event: StorageEvent) => {
+      if (!demo || event.key !== DEMO_KEY || authLock.current || batchLock.current || feedback.lock.current) return;
+      const snapshot = readDemo(), id = sessionStorage.getItem("desk-demo-user");
+      acceptSnapshot(snapshot, snapshot.staff.find(p => p.id === id && p.active) ?? null);
+    };
+    const timer = window.setInterval(() => listener(), 60000);
+    window.addEventListener("storage", storage);
+    if (initialFetch.current) { initialFetch.current = false; listener(true); }
+    return () => { window.removeEventListener("storage", storage); window.clearInterval(timer); };
+  }, [refresh, feedback.lock, profile, demo, acceptSnapshot]);
   useEffect(() => { if (!demo && profile?.role === "security" && !profile.must_change_password) window.location.replace("/security"); }, [profile, demo]);
   useEffect(() => () => clearPreviews(), [clearPreviews]);
   useEffect(() => {
@@ -454,6 +470,14 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     let billTokens: Record<string, string | null>;
     try {
       billTokens = Object.fromEntries(preview.map(b => [b.id, tokenNumber(tokens[b.id] ?? b.token_number)]));
+      const bills = [...new Map([...preview, ...data.bills].map(b => [b.id, b])).values()];
+      for (const item of pending) for (const draft of item.bills) {
+        const b = bills.find(b => b.id === draft.id)!;
+        try {
+          if (!b.payment_route && !isSupportingNote(b)) throw new Error("Choose a payment route first");
+          if (b.settlement && !b.settlement.revoked && ['draft', 'returned'].includes(b.settlement.state || '')) validateApproval(b.settlement, bills.filter(x => x.settlement?.id === b.settlement!.id), data.payments);
+        } catch (e) { throw new Error(`${b.invoice_reference || item.name}: ${(e as Error).message}`); }
+      }
     } catch (e) { setNotice((e as Error).message); return; }
     if (!feedback.begin("Submitting bills…", pending.reduce((n, f) => n + f.bills.length, 0), "inline")) return;
     batchLock.current = true; refreshVersion.current++; setBatchBusy(true);
@@ -469,8 +493,6 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
           const submitted = item.bills.map(b => ({ ...b, token_number: billTokens[b.id], customer_phone: b.customer_phone || null, uploads: { ...b.uploads!, confirmed_at: now } }));
           if (demo) {
             let snapshot = readDemo();
-            if (item.bills.some(b => !b.payment_route && !isSupportingNote(b))) throw new Error("Choose a payment route for every invoice first");
-            for (const b of item.bills) if (b.settlement) validateApproval(b.settlement, snapshot.bills.filter(x => x.settlement?.id === b.settlement!.id), snapshot.payments);
             if (snapshot.bills.some(b => b.upload_id !== item.uploadId && b.uploads?.confirmed_at && b.uploads.file_hash === item.bills[0].uploads?.file_hash)) throw new Error("This PDF has already been submitted");
             submitted.forEach(b => {
               const index = snapshot.bills.findIndex(existing => existing.id === b.id);

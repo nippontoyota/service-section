@@ -29,7 +29,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         return NextResponse.json({ error: "This PDF has already been submitted. Use the existing bill." }, { status: 409 });
       }
       if (["P0002", "55000", "42501", "P0001", "22023"].includes(error.code)) {
-        const status = error.code === "22023" ? 400 : error.code === "P0002" ? 404 : error.code === "55000" ? 409 : 403;
+        const status = ["22023", "P0001"].includes(error.code) ? 400 : error.code === "P0002" ? 404 : error.code === "55000" ? 409 : 403;
         return NextResponse.json({ error: error.message }, { status });
       }
       console.error("Upload confirmation failed:", error.code, error.message);

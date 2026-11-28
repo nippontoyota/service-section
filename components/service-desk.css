@@ -491,10 +491,10 @@
 .sd-approval-sheet textarea { width: 100%; min-height: 80px; border: 1px solid var(--sd-line); border-radius: 8px; padding: 11px 13px; font: inherit; resize: vertical; }
 @media print { .sd-approval-sheet, .sd-approval-sheet * { visibility: visible !important; } }
 
-.sd-payment-route-picker { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; padding: 14px; margin: 14px 0; border: 1px solid #efbac0; border-radius: 10px; background: var(--sd-accent-wash); }
-.sd-payment-route-picker > label { flex: 1; min-width: 180px; color: var(--sd-accent-ink); }
-.sd-app .sd-payment-route-picker select { min-height: 46px; border: 2px solid var(--sd-accent); background: white; color: var(--sd-accent-ink); font-weight: 700; cursor: pointer; }
-.sd-payment-route-picker select:focus-visible { outline: 3px solid #efbac0; outline-offset: 2px; }
+.sd-payment-route-picker { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; padding: 14px; margin: 14px 0; border: 1px solid var(--sd-line); border-radius: 10px; background: var(--sd-subtle); }
+.sd-payment-route-picker > label { flex: 1; min-width: 180px; color: var(--sd-ink); }
+.sd-app .sd-payment-route-picker select { min-height: 46px; border: 2px solid var(--sd-ink); background: white; color: var(--sd-ink); font-weight: 700; cursor: pointer; }
+.sd-payment-route-picker select:focus-visible { outline: 3px solid var(--sd-line); outline-offset: 2px; }
 .sd-payment-route-picker > small { width: 100%; }
 .sd-approval-sheet.sd-approval-form-only { margin: 0; padding: 0; border: 0; }
 .sd-approval-form-only > .sd-section-heading { display: none; }
