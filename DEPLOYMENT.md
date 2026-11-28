@@ -184,3 +184,5 @@ Batch PDF uploads now use four concurrent upload/read workers in the connected w
 ## Loading feedback
 
 Full-screen pending feedback is reserved for sign-in/out, PDF upload/read, and cashier WhatsApp gate-pass preparation. Other actions use inline status and existing action locks. All confirmed successful actions retain the brief success screen; failures and uncertain writes retain their recovery flow. Advisor submission stays inline. The four-worker PDF pipeline and real ready/total percentage are unchanged.
+
+Customer bill selection: apply `supabase/migrations/202611280001_customer_bill_selection.sql` after the settlements migrations before deploying. Cashiers can select outstanding bills for one customer, including different vehicles, and collect their combined remaining balance in one payment. Credit and insurance arrangements remain per vehicle.

@@ -1,12 +1,12 @@
 "use client";
 import { useRef, useState } from "react";
-import { balance, collected, indiaDate, isPaid, isSupportingNote, money, paymentMethods, paymentReferenceLabel, type DeskBill, type Snapshot, type Staff } from "@/lib/desk";
-import { payerBalance, payerCollected, rupees, sameVehicleBills, type SettlementDetails } from "@/lib/settlement";
+import { balance, billAmount, billType, collected, indiaDate, isPaid, isSupportingNote, money, paymentMethods, paymentReferenceLabel, type DeskBill, type Snapshot, type Staff } from "@/lib/desk";
+import { payerBalance, payerCollected, rupees, sameCustomerBills, sameVehicleBills, settlementStatus, type SettlementDetails } from "@/lib/settlement";
 
 type Submit = (body: { action: string; [key: string]: unknown }) => Promise<boolean | undefined>;
-export function SettlementPanel({ bill, snapshot, actor, busy, onSubmit }: { bill: DeskBill; snapshot: Snapshot; actor: Staff; busy: boolean; onSubmit: Submit }) {
+export function SettlementPanel({ bill, snapshot, actor, busy, onSubmit, onOpenBill }: { bill: DeskBill; snapshot: Snapshot; actor: Staff; busy: boolean; onSubmit: Submit; onOpenBill: (id: string) => void }) {
   const [mode, setMode] = useState("collect");
-  const [payer, setPayer] = useState<"customer" | "insurer">("customer");
+  const payer = "customer";
   const [excluded, setExcluded] = useState<string[]>([]);
   const [shares, setShares] = useState<Record<string, string>>({});
   const [amount, setAmount] = useState("");
@@ -16,14 +16,15 @@ export function SettlementPanel({ bill, snapshot, actor, busy, onSubmit }: { bil
   const [error, setError] = useState("");
   const [details, setDetails] = useState<SettlementDetails>({ approvedOn: indiaDate(), responsibleStaff: actor.full_name });
   const request = useRef({ fingerprint: "", id: "" });
-  const related = sameVehicleBills(bill, snapshot.bills);
-  const candidates = related.filter(b => !isSupportingNote(b) && !isPaid(b, snapshot.payments) && (mode === "collect" ? (payerBalance(b, snapshot.payments, payer) ?? 0) > 0 : !b.settlement || b.settlement.revoked));
+  const related = mode === "collect" ? sameCustomerBills(bill, snapshot.bills) : sameVehicleBills(bill, snapshot.bills);
+  const candidates = related.filter(b => b.uploads?.confirmed_at && b.amount_paise !== null && b.invoice_date && b.invoice_reference?.trim() && !isSupportingNote(b) && !isPaid(b, snapshot.payments) && (mode === "collect" ? (payerBalance(b, snapshot.payments, payer) ?? 0) > 0 : !b.settlement || b.settlement.revoked));
   const selected = candidates.filter(b => !excluded.includes(b.id));
   const amountFor = (b: DeskBill) => mode === "insurance" ? Math.max(0, (() => { try { return rupees(shares[b.id] || "0"); } catch { return 0; } })() - payerCollected(b, snapshot.payments, "customer")) : payerBalance(b, snapshot.payments, payer) ?? 0;
   const total = selected.reduce((sum, b) => sum + amountFor(b), 0);
   const paidNow = amount === "" ? mode === "credit" ? 0 : total : (() => { try { return rupees(amount); } catch { return NaN; } })();
   const entries = selected.map((b, index) => { const allocation = Math.min(Math.max(0, paidNow - selected.slice(0, index).reduce((sum, previous) => sum + amountFor(previous), 0)), amountFor(b)); return { billId: b.id, amountPaise: allocation, ...(mode === "insurance" ? { customerSharePaise: (() => { try { return rupees(shares[b.id] || "0"); } catch { return NaN; } })() } : {}) }; });
   const referenceLabel = paymentReferenceLabel(method);
+  const paysInFull = mode === "collect" && selected.length > 0 && paidNow === total && selected.every(b => amountFor(b) === balance(b, snapshot.payments));
   const changeDetail = (key: keyof SettlementDetails, value: string) => setDetails(current => ({ ...current, [key]: value }));
   async function submit() {
     setError("");
@@ -40,13 +41,20 @@ export function SettlementPanel({ bill, snapshot, actor, busy, onSubmit }: { bil
   const settlement = bill.settlement;
   return <section className="sd-settlement">
     {actor.role === "cashier" && !isSupportingNote(bill) && <form onSubmit={e => { e.preventDefault(); void submit(); }}>
-      <h3>Customer &amp; vehicle collection</h3><p>All dates · {bill.customer_name} · {bill.vehicle_no_display || "Selected invoice"}</p>
-      <div className="sd-settlement-fields"><label>Collection type<select disabled={busy} value={mode} onChange={e => { setMode(e.target.value); setPayer("customer"); setAmount(""); setExcluded([]); }}><option value="collect">Collect payment</option><option value="insurance">Insurance customer share</option><option value="credit">Credit form · service</option></select></label>
-      {mode === "collect" && <label>Payer<select disabled={busy} value={payer} onChange={e => { setPayer(e.target.value as typeof payer); setAmount(""); setExcluded([]); }}><option value="customer">Customer</option><option value="insurer">Insurer</option></select></label>}</div>
-      <div className="sd-allocations">{candidates.map(b => <div className="sd-allocation" key={b.id}><label className="sd-bill-check"><input type="checkbox" disabled={busy || b.amount_paise === null} checked={!excluded.includes(b.id)} onChange={e => setExcluded(current => e.target.checked ? current.filter(id => id !== b.id) : [...current, b.id])}/><span><strong>{b.invoice_reference}</strong><small>{b.invoice_date} · Balance {money(balance(b, snapshot.payments))}</small></span></label>
-        {mode === "insurance" ? <label>Customer share (₹)<input aria-label={`Customer share ${b.invoice_reference}`} type="number" min="0" max={(b.amount_paise ?? 0) / 100} step="0.01" required={!excluded.includes(b.id)} disabled={busy} value={shares[b.id] ?? ""} onChange={e => setShares(current => ({ ...current, [b.id]: e.target.value }))}/></label> : <strong>{money(payerBalance(b, snapshot.payments, payer))}</strong>}
-        {!excluded.includes(b.id) && <small>Collect now: {money(entries.find(e => e.billId === b.id)?.amountPaise || 0)}</small>}
-      </div>)}</div>
+      <h3>Customer collection</h3><p>{bill.customer_name}{bill.customer_reference ? " · Customer ID " + bill.customer_reference : ""}</p>
+      <div className="sd-settlement-fields"><label>Collection type<select disabled={busy} value={mode} onChange={e => { setMode(e.target.value); setAmount(""); setExcluded([]); }}><option value="collect">Collect payment</option><option value="insurance">Insurance customer share</option><option value="credit">Credit form · service</option></select></label>
+      </div>
+      <section className="sd-related sd-collection-bills" aria-label="Customer bill selection"><h3>This customer’s bills</h3><p>{mode === "collect" ? "Select the bills to pay together. The amount updates with your selection." : "Select bills for this vehicle’s arrangement."}</p>
+      <div className="sd-actions"><strong aria-live="polite">{selected.length} bill{selected.length === 1 ? "" : "s"} selected · {money(total)}</strong><button type="button" disabled={busy || !candidates.length} onClick={() => { setExcluded(selected.length === candidates.length ? candidates.map(b => b.id) : []); setAmount(""); }}>{selected.length === candidates.length ? "Clear selection" : "Select all outstanding bills"}</button></div>
+      <div className="sd-allocations">{(mode === "collect" ? related : candidates).map(b => {
+        const eligible = candidates.includes(b);
+        const checked = eligible && !excluded.includes(b.id);
+        const unavailable = !b.uploads?.confirmed_at ? "Not submitted" : isSupportingNote(b) ? "No collection required" : isPaid(b, snapshot.payments) ? "Paid in full" : b.amount_paise === null || !b.invoice_date || !b.invoice_reference?.trim() ? "Bill details need review" : `No ${payer} balance due`;
+        return <div className="sd-allocation" key={b.id} data-selected={checked}><label className="sd-bill-check"><input type="checkbox" aria-label={`Select bill ${b.invoice_reference || b.id}`} disabled={busy || !eligible} checked={checked} onChange={e => { setExcluded(current => e.target.checked ? current.filter(id => id !== b.id) : [...current, b.id]); setAmount(""); }}/><span><strong>{b.invoice_reference || "Invoice not read"}</strong><small>{billType(b)}</small><small>{b.invoice_date || "Date not read"} · {b.vehicle_no_display || "Vehicle not read"}</small><small>{eligible ? settlementStatus(b, snapshot.payments) : unavailable}</small></span></label>
+        {mode === "insurance" ? <label>Customer share (₹)<input aria-label={`Customer share ${b.invoice_reference}`} type="number" min="0" max={(b.amount_paise ?? 0) / 100} step="0.01" required={checked} disabled={busy} value={shares[b.id] ?? ""} onChange={e => setShares(current => ({ ...current, [b.id]: e.target.value }))}/></label> : <strong>{eligible ? money(payerBalance(b, snapshot.payments, payer)) : billAmount(b)}</strong>}
+        {checked && <small>Collect now: {money(entries.find(e => e.billId === b.id)?.amountPaise || 0)}</small>}
+        <button type="button" disabled={busy} aria-label={`Open bill ${b.invoice_reference || b.id}`} onClick={() => onOpenBill(b.id)}>View bill</button>
+      </div>; })}</div></section>
       {!candidates.length && <p className="sd-muted">No eligible outstanding bills for this collection type.</p>}
       {mode !== "collect" && <fieldset className={mode === "credit" ? "sd-credit-fields" : "sd-insurance-fields"}><legend>{mode === "credit" ? "CREDIT FORM – SERVICE" : "Insurance arrangement"}</legend><div className="sd-settlement-fields">
         {mode === "insurance" && <label>Insurer<input required maxLength={200} disabled={busy} value={details.insurer || ""} onChange={e => changeDetail("insurer", e.target.value)}/></label>}
@@ -65,7 +73,7 @@ export function SettlementPanel({ bill, snapshot, actor, busy, onSubmit }: { bil
         {referenceLabel && <label>{referenceLabel} (required)<input required maxLength={100} disabled={busy} value={reference} onChange={e => setReference(e.target.value)}/></label>}
       </div>}
       {error && <p role="alert" className="sd-warning">{error}</p>}
-      <button className="sd-primary" disabled={busy || !selected.length || !Number.isFinite(paidNow) || (mode === "collect" && paidNow === 0) || (paidNow > 0 && (!method || Boolean(referenceLabel && !reference.trim()) || (method === "Other" && !otherMethod.trim())))}>{mode === "collect" ? "Record payment" : mode === "credit" ? "Save approved credit" : "Save insurance arrangement"} · {money(Number.isFinite(paidNow) ? paidNow : 0)}</button>
+      <button className="sd-primary" disabled={busy || !selected.length || !Number.isFinite(paidNow) || paidNow < 0 || paidNow > total || (mode === "collect" && paidNow === 0) || (paidNow > 0 && (!method || Boolean(referenceLabel && !reference.trim()) || (method === "Other" && !otherMethod.trim())))}>{mode === "collect" ? paysInFull ? "Mark selected bills as paid" : "Record payment" : mode === "credit" ? "Save approved credit" : "Save insurance arrangement"} · {money(Number.isFinite(paidNow) ? paidNow : 0)}</button>
     </form>}
     {settlement && <SettlementRecord key={settlement.id + JSON.stringify(settlement.details)} bill={bill} snapshot={snapshot} actor={actor} busy={busy} onSubmit={onSubmit}/>}
   </section>;

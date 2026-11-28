@@ -44,6 +44,11 @@ export function sameVehicleBills(selected: DeskBill, bills: DeskBill[]) {
   return bills.filter(b => b.uploads?.confirmed_at && (b.id === selected.id || (vehicle && vehicleKey(b.vehicle_no_display) === vehicle && (b.customer_id || customerKey(b)) === (selected.customer_id || customerKey(selected)))))
     .sort((a, b) => (a.invoice_date || "9999").localeCompare(b.invoice_date || "9999") || a.id.localeCompare(b.id));
 }
+export function sameCustomerBills(selected: DeskBill, bills: DeskBill[]) {
+  const customer = selected.customer_id || customerKey(selected);
+  return bills.filter(b => (b.customer_id || customerKey(b)) === customer)
+    .sort((a, b) => (a.invoice_date || "9999").localeCompare(b.invoice_date || "9999") || a.id.localeCompare(b.id));
+}
 export function cashierRows(snapshot: Snapshot, tab: string, day: string, query: string) {
   const search = query.trim().toLowerCase();
   return snapshot.bills.filter(b => {
@@ -112,8 +117,8 @@ export function demoSettlement(snapshot: Snapshot, actor: Staff, request: Settle
   } else {
     if (actor.role !== "cashier") throw new Error("Cashier role required");
     bills = request.entries.map(e => { const b = next.bills.find(b => b.id === e.billId); if (!b) throw new Error("Bill not found"); return b; });
-    const allowed = sameVehicleBills(bills[0], next.bills);
-    if (bills.some(b => !allowed.includes(b) || b.amount_paise === null || !b.invoice_date || !b.invoice_reference)) throw new Error("Readable submitted bills for one customer and vehicle required");
+    const allowed = request.action === "collect_batch" ? sameCustomerBills(bills[0], next.bills) : sameVehicleBills(bills[0], next.bills);
+    if (bills.some(b => !allowed.includes(b) || !b.uploads?.confirmed_at || isSupportingNote(b) || b.amount_paise === null || !b.invoice_date || !b.invoice_reference?.trim())) throw new Error(request.action === "collect_batch" ? "Readable submitted bills for one customer required" : "Readable submitted bills for one customer and vehicle required");
     const settlement: Settlement | undefined = request.action === "arrange" ? { id: request.requestId, number: Math.max(0, ...next.bills.map(b => b.settlement?.number ?? 0)) + 1, kind: request.kind!, details: request.details, revoked: false, created_at: now, recorded_by: actor.id } : undefined;
     for (const [index, bill] of bills.entries()) {
       const entry = request.entries[index];

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 export async function checkSettlements(db) {
  await db.exec(readFileSync('supabase/migrations/202611200001_settlements.sql','utf8'));
  await db.exec(readFileSync('supabase/migrations/202611200002_gate_pass_documents.sql','utf8'));
+ await db.exec(readFileSync('supabase/migrations/202611280001_customer_bill_selection.sql','utf8'));
  const ids=Object.fromEntries(['cashier','advisor','admin','guard'].map(k=>[k,randomUUID()]));
  for(const [name,id] of Object.entries(ids)) await db.query('insert into profiles(id,staff_id,full_name,role,must_change_password) values($1,$2,$2,$3,false)',[id,'settlement_'+name,{advisor:'service_advisor',admin:'super_admin',guard:'security',cashier:'cashier'}[name]]);
  const makeBill=async (customer='SETTLEMENT',amount=1000000,vehicle='KL01AB1234')=>{
@@ -20,13 +21,23 @@ export async function checkSettlements(db) {
  const check=async(p,confirm=false)=>(await db.query('select app_check_gate_pass($1,$2,$3) result',[ids.guard,hash(p.id),confirm])).rows[0].result;
  const snapshot=async()=>(await db.query('select app_desk_snapshot($1) result',[ids.cashier])).rows[0].result;
  const first=await makeBill(),second=await makeBill(),other=await makeBill('SETTLEMENT',1000000,'KL01ZZ9999');
- await assert.rejects(operation(collect([entry(first,1000000),entry(other,1000000)])),/one customer and vehicle/);
+ const foreign=await makeBill('DIFFERENT-CUSTOMER');
+ await assert.rejects(operation(collect([entry(first,1000000),entry(foreign,1000000)])),/one customer/);
+ await assert.rejects(operation(arrange('credit',[entry(first,0),entry(other,0)])),/one customer and vehicle/);
  assert.equal((await snapshot()).payments.filter(p=>p.bill_id===first).length,0,'batch rolls back all invoices');
  await assert.rejects(operation(collect([entry(first,1000000)]),randomUUID(),ids.advisor),/access/);
  const batch=randomUUID(),payload=collect([entry(first,1000000),entry(second,1000000)]);
  await operation(payload,batch);await operation(payload,batch);
  assert.equal((await snapshot()).payments.filter(p=>p.collection_id===batch).length,2);
  await assert.rejects(operation({...payload,method:'GPay'},batch),/already used/);
+ await operation(collect([entry(other,1000000)]));
+ const across1=await makeBill('ACROSS',200000,'KL01AB1111'),across2=await makeBill('ACROSS',300000,'KL01AB2222'),unselected=await makeBill('ACROSS');
+ const acrossBatch=randomUUID();
+ await operation(collect([entry(across1,200000),entry(across2,300000)]),acrossBatch);
+ const acrossSnapshot=await snapshot();
+ assert.equal(acrossSnapshot.payments.filter(p=>p.collection_id===acrossBatch).reduce((sum,p)=>sum+p.amount_paise,0),500000);
+ assert.ok([across1,across2].every(id=>acrossSnapshot.bills.find(b=>b.id===id).status==='paid'));
+ assert.equal(acrossSnapshot.payments.some(p=>p.bill_id===unselected),false);
  const pass=await issue(first,[{billId:first,jobNumber:'RO-123',jobDate:'2026-11-18'}]);
  assert.equal(pass.status,'Valid');assert.ok(pass.number>0);assert.equal(pass.documents.length,2);assert.ok(pass.issuedAt);assert.equal(pass.issuedBy,'settlement_cashier');
  assert.equal(pass.documents.find(d=>d.billId===first).jobDate,'2026-11-18');

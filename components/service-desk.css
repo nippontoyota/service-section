@@ -450,3 +450,11 @@
  .sd-credit-sheet textarea,.sd-insurance-sheet textarea{min-height:38px;padding:5px;font-size:10px;line-height:1.2}
  .sd-credit-sheet label,.sd-insurance-sheet label{font-size:10px;break-inside:avoid}
 }
+
+.sd-collection-bills{margin-top:0}
+.sd-collection-bills .sd-allocations{border:0}
+.sd-collection-bills .sd-allocation{margin-top:10px;padding:13px;border:1px solid var(--sd-line);border-radius:8px;background:white}
+.sd-collection-bills .sd-allocation[data-selected="true"]{border-color:var(--sd-accent);background:var(--sd-accent-wash)}
+.sd-collection-bills .sd-bill-check{flex:1 1 240px;cursor:pointer}
+.sd-collection-bills .sd-bill-check input{flex-shrink:0}
+.sd-collection-bills .sd-bill-check span{min-width:0;overflow-wrap:anywhere}

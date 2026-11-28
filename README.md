@@ -161,3 +161,5 @@ The customer’s WhatsApp link opens a mobile layout with a Print gate pass butt
 ## Settlement verification
 
 Run `npm test`, `npm run lint`, and `npm run build`. `npm run test:database` runs migrations and synthetic transactional checks in PGlite (set `PGLITE_PATH` to an installed test-only package if needed). `scripts/check-settlements-browser.mjs` exercises a local demo server, with `PLAYWRIGHT_PATH` and `DESK_URL` overrides. Generated screenshots and printable samples are kept under ignored `output/settlement-checks/`.
+
+Customer bill selection: apply `supabase/migrations/202611280001_customer_bill_selection.sql` after the settlements migrations before deploying. Cashiers can select outstanding bills for one customer, including different vehicles, and collect their combined remaining balance in one payment. Credit and insurance arrangements remain per vehicle.
