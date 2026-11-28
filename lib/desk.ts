@@ -1,4 +1,4 @@
-export type Role = "cashier" | "service_advisor" | "super_admin" | "security";
+export type Role = "cashier" | "service_advisor" | "super_admin" | "security" | "team_leader";
 export type Staff = { id: string; staff_id: string; full_name: string; role: Role; active: boolean; must_change_password: boolean };
 export type PaymentEvidence = { amount_paise: number; method: string; date: string; evidence: string };
 export type BillDocument = {
@@ -6,8 +6,10 @@ export type BillDocument = {
   billType: string;
   billedTo: string;
   typeEvidence: string;
+  customerPhone?: string;
 };
 export type DeskBill = {
+  payment_route?: "ordinary" | "insurance" | "credit" | null;
   settlement?: import("./settlement").Settlement | null;
   gate_completed?: boolean;
   customer_share_paise?: number | null;

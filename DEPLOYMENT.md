@@ -186,3 +186,31 @@ Batch PDF uploads now use four concurrent upload/read workers in the connected w
 Full-screen pending feedback is reserved for sign-in/out, PDF upload/read, and cashier WhatsApp gate-pass preparation. Other actions use inline status and existing action locks. All confirmed successful actions retain the brief success screen; failures and uncertain writes retain their recovery flow. Advisor submission stays inline. The four-worker PDF pipeline and real ready/total percentage are unchanged.
 
 Customer bill selection: apply `supabase/migrations/202611280001_customer_bill_selection.sql` after the settlements migrations before deploying. Cashiers can select outstanding bills for one customer, including different vehicles, and collect their combined remaining balance in one payment. Credit and insurance arrangements remain per vehicle.
+
+## Team Leader approvals
+
+Apply `202611280002_team_leader.sql` after `202611280001_customer_bill_selection.sql` during a coordinated application release. The migration preserves existing settlements as `legacy_approved`, retains payer allocations and history, and blocks the retired cashier-created arrangement operation. Old clients must refresh. New uploads require an explicit payment route for every monetary invoice before confirmation; existing invoices are backfilled as ordinary payment or their existing arrangement type.
+
+Create one active **Team Leader** account in the admin staff screen. The database enforces one active TL per deployment; disabling that account allows creating or enabling its replacement. Requests remain pending if no active TL is available. Approval names are saved with each decision, so account deletion or replacement cannot rewrite signatures. Branch separation is not included in this release.
+
+Advisors save insurance/credit drafts, then submit uploads (or submit a revised saved request). The TL can edit final terms and approve, or return with a reason. Cashiers accept approved terms, collect the required customer amount, and issue a gate pass. Insurance and credit receipts remain in the existing payment ledger. The TL can append follow-up notes and dates but cannot record receipts. Only admin can revoke an approval; changing approved terms requires a replacement request.
+
+Authenticated invoice previews and verified insurer PDF downloads contain only the selected invoice pages. Original uploads remain unchanged. Forms and verified PDFs include the recorded TL name, approval date/time in India time, and case reference. Legacy records have no fabricated signature.
+
+Verification:
+
+```sh
+npm test
+npm run lint
+npm run build
+PGLITE_PATH=/path/to/node_modules/@electric-sql/pglite npm run test:database
+PLAYWRIGHT_PATH=/path/to/node_modules/playwright CHROMIUM_PATH=/path/to/chrome node scripts/check-approvals-browser.mjs
+```
+
+The browser check uses a local demo server at `DESK_URL` (default `http://localhost:3120`), synthetic records and isolated browser storage. Run it after `npm test`, with the local dev server started with empty Supabase environment variables and `SERVICE_DESK_DEMO=true`. Screenshots and printable forms are written under ignored `output/approval-checks`.
+
+## Clear operational records while retaining staff
+
+Use `node --env-file=.env.local scripts/reset-operational.mjs` to preview the connected project and counts. `--apply` backs up all operational tables and every bills-bucket object to a private ignored `output/operational-reset-<timestamp>/` directory before deleting the captured records. The backup includes object paths and SHA-256 checksums. Profiles, credentials and sessions are preserved; unchanged profiles/password hashes and empty operational tables/storage are checked at completion. This tool does not apply migrations or deploy the application.
+
+Run with app traffic paused. If records change during backup, the script aborts before deletion; if traffic introduces new data during deletion, it stops and reports the backup location. The older `reset-production.mjs` has a different scope and removes staff accounts: do not use it when retaining staff.

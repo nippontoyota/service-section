@@ -72,6 +72,13 @@ function cleanName(value: string) {
   return value.replace(/^(?:Mr|Mrs|Ms|M\/s)\.?\s+/i, "").replace(/\s+/g, " ").trim();
 }
 
+export function customerContact(text: string) {
+  const block = text.split(/Details of Consignee\s*\(Shipped To\)\s*:?/i)[1]?.split(/Place of Supply/i)[0] || text.match(/Customer (?:Details|Information)\s*:?([\s\S]*?)(?:Vehicle|Invoice|Job Card)/i)?.[1] || '';
+  const matches = [...block.matchAll(/(?:Mobile|Phone|Telephone|Contact\s*(?:No\.?|Number))\s*[:.-]?\s*(\+?[\d ()-]{8,22})/gi)].map(m => m[1].replace(/[^+\d]/g, ''));
+  const numbers = [...new Set(matches.map(n => /^\d{10}$/.test(n) ? '+91' + n : /^91\d{10}$/.test(n) ? '+' + n : n).filter(n => /^\+[1-9]\d{7,14}$/.test(n)))];
+  return numbers.length === 1 ? numbers[0] : '';
+}
+
 function parties(text: string) {
   const receiver = text.split(/Details of Receiver\s*\(Billed To\)\s*:?/i)[1]?.split(/Details of Consignee/i)[0] ?? "";
   const consignee = text.split(/Details of Consignee\s*\(Shipped To\)\s*:?/i)[1]?.split(/Place of Supply/i)[0] ?? "";
@@ -179,7 +186,7 @@ export async function extractBills(data: Uint8Array) {
 
     const invoice = invoiceReference(text);
     const job = reference(text, /job\s*card\s*(?:no|number)?/i) || text.match(/\b(?:GSJ|BPJ)\d{2}-\d{4,8}\b/i)?.[0] || "";
-    const document = documentDetails(text, invoice, job, party.billedTo);
+    const document = { ...documentDetails(text, invoice, job, party.billedTo), customerPhone: customerContact(text) };
     const financial = financialFields(text);
     if (["warranty_note", "amc_note"].includes(document.kind) && financial.amountPaise === null && !financial.amountEvidence) {
       financial.extractionIssues = financial.extractionIssues.filter(issue => !issue.startsWith("Invoice total could not"));

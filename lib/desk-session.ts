@@ -12,7 +12,7 @@ export async function loadDesk(request: Request) {
       .select("id,original_filename,status,processing_error,bills(*)")
       .eq("uploaded_by", profile.id).is("confirmed_at", null).order("created_at");
     if (draftError) throw new Error("Could not restore drafts. Please retry.");
-    snapshot.drafts = drafts;
+    snapshot.drafts = drafts.map(d => ({ ...d, bills: d.bills.map((b: { id: string }) => snapshot.bills.find(existing => existing.id === b.id) || b) })) as Snapshot["drafts"];
   }
   return { profile, snapshot };
 }

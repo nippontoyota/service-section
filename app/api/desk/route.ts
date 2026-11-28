@@ -4,6 +4,7 @@ import { AuthenticationError, requireStaff, startSession } from "@/lib/supabase-
 import { hashPassword } from "@/lib/password";
 import { loadDesk } from "@/lib/desk-session";
 import { paymentMethod, transactionId } from "@/lib/desk";
+import { approvalActions, normalizeApprovalRequest } from "@/lib/approval";
 import { normalizeSettlementRequest } from "@/lib/settlement";
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -16,7 +17,6 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const authStart = performance.now();
     const { service, profile, user } = await requireStaff(request, body.action === "password");
     if (profile.role === "security" && body.action !== "password") return json({ error: "Security workspace only" }, 403);
     if (body.action === "password") {
@@ -27,6 +27,10 @@ export async function POST(request: Request) {
       const response = json({ ok: true });
       await startSession(response, user.id, passwordHash);
       return response;
+    } else if (approvalActions.includes(body.action)) {
+      const payload = normalizeApprovalRequest(body);
+      const { error } = await service.rpc("app_approval_action", { staff: user.id, request_id: payload.requestId, payload });
+      if (error) throw new Error(error.code === "PGRST202" ? "Apply the Team Leader migration before using this workflow." : error.message);
     } else if (["collect_batch", "arrange", "update_settlement", "revoke_settlement"].includes(body.action)) {
       const payload = normalizeSettlementRequest(body);
       const { error } = await service.rpc("app_settle_bills", { staff: user.id, request_id: payload.requestId, payload });
@@ -40,7 +44,7 @@ export async function POST(request: Request) {
     } else if (body.action === "reextract") {
       if (profile.role !== "super_admin") throw new Error("Super admin role required");
       const { data: bill } = await service.from("bills").select("*").eq("id",body.target).single();
-      if (!bill || bill.approval_status !== "pending") throw new Error("Only pending historical bills can be re-extracted");
+      if (!bill || bill.approval_status !== "pending" || bill.settlement_id) throw new Error("Only pending historical bills can be re-extracted");
       const { count, error: paymentError } = await service.from("payments").select("id",{count:"exact",head:true}).eq("bill_id",bill.id);
       if (paymentError || count) throw new Error("A bill with payment history cannot be re-extracted");
       const { data: upload } = await service.from("uploads").select("storage_path").eq("id",bill.upload_id).single();
@@ -58,21 +62,15 @@ export async function POST(request: Request) {
       const { error: auditError } = await service.from("audit_events").insert({actor_id:user.id,bill_id:bill.id,action:"reextracted",detail:{previous_amount:bill.amount_paise,amount:extracted.amountPaise}});
       if (auditError) throw auditError;
     } else if (body.action === "pdf") {
+      const { data: visible, error: accessError } = await service.rpc("app_desk_snapshot", { staff: user.id });
+      if (accessError || !visible?.bills?.some((b: { id: string }) => b.id === body.target)) throw new Error("Bill not accessible");
       const { data: bill, error } = await service.from("bills")
         .select("upload_id,uploaded_by,uploads!inner(storage_path,confirmed_at)").eq("id", body.target).single();
       if (error || !bill) throw new Error("Bill not accessible");
       if (profile.role === "service_advisor" && bill.uploaded_by !== user.id) throw new Error("Bill not accessible");
       const upload = bill.uploads as unknown as { storage_path: string; confirmed_at: string | null };
       if (profile.role === "cashier" && !upload.confirmed_at) throw new Error("PDF not accessible");
-      const authorization = performance.now() - authStart;
-      const signingStart = performance.now();
-      const expiresAt = Date.now() + 300_000;
-      const { data, error: signedError } = await service.storage.from("bills").createSignedUrl(upload.storage_path, 300);
-      if (signedError) throw signedError;
-      const signing = performance.now() - signingStart;
-      const response = json({ url: data.signedUrl, uploadId: bill.upload_id, expiresAt, timings: { authorization, signing } });
-      response.headers.set("Server-Timing", `authorization;dur=${authorization.toFixed(1)}, signing;dur=${signing.toFixed(1)}`);
-      return response;
+      return json({ url: `/api/bills/${body.target}/pdf`, uploadId: body.target, expiresAt: Date.now() + 300_000 });
     } else if (["create_staff", "reset_staff", "toggle_staff", "delete_staff"].includes(body.action)) {
       if (profile.role !== "super_admin") throw new Error("Super admin role required");
       if (body.target === user.id) throw new Error("You cannot delete, disable or reset your own account here.");
@@ -86,7 +84,7 @@ export async function POST(request: Request) {
       } else {
         const temporaryPassword = body.action === "reset_staff" ? randomBytes(18).toString("base64url") + "!a9" : undefined;
         if (body.action === "create_staff") {
-          if (!/^[a-z0-9_]{3,40}$/.test(body.staffId ?? "") || !["cashier","service_advisor","super_admin","security"].includes(body.role) || typeof body.fullName !== "string" || !body.fullName.trim() || body.fullName.length > 100) throw new Error("Valid user ID, name and role required");
+          if (!/^[a-z0-9_]{3,40}$/.test(body.staffId ?? "") || !["cashier","service_advisor","super_admin","security","team_leader"].includes(body.role) || typeof body.fullName !== "string" || !body.fullName.trim() || body.fullName.length > 100) throw new Error("Valid user ID, name and role required");
         }
         const passwordHash = await hashPassword(temporaryPassword ?? body.password, body.action === "create_staff" ? 8 : 128);
         const { error } = await service.rpc("app_staff_account", {

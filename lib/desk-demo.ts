@@ -1,6 +1,8 @@
+import { arrangementApproved } from "./approval";
 import { collected, customerKey, paymentMethod, transactionId, type Snapshot, type Staff } from "./desk";
 export const DEMO_KEY = "service-desk-finance-demo-v1";
 export const demoAccounts = [
+  { id: "demo-tl", staff_id: "tl01", full_name: "Meera Menon", role: "team_leader", password: "LeaderDemo!2026" },
   { id: "demo-cashier", staff_id: "cashier01", full_name: "Riya Nair", role: "cashier", password: "CashierDemo!2026" },
   { id: "demo-advisor", staff_id: "advisor01", full_name: "Amal Joseph", role: "service_advisor", password: "AdvisorDemo!2026" },
   { id: "demo-admin", staff_id: "admin01", full_name: "Centre Administrator", role: "super_admin", password: "AdminDemo!2026" },
@@ -10,7 +12,10 @@ export function freshDemo(): Snapshot {
   return { bills:[],payments:[],staff,audit:[],as_of:new Date().toISOString(),schema_version:2 };
 }
 export function upgradeDemo(snapshot: Snapshot): Snapshot {
-  if (snapshot.schema_version === 2) return snapshot;
+  if (snapshot.schema_version === 2) {
+    if (snapshot.staff.some(p => p.id === "demo-tl")) return snapshot;
+    return { ...snapshot, staff: [...snapshot.staff, { id: "demo-tl", staff_id: "tl01", full_name: "Meera Menon", role: "team_leader", active: true, must_change_password: false }] };
+  }
   const next = structuredClone(snapshot);
   for (const b of next.bills) {
     b.customer_id = b.customer_id || "demo-customer:" + customerKey(b);
@@ -42,6 +47,7 @@ export function demoAction(snapshot: Snapshot, user: Staff, action: string, targ
     next.payments.push({ ...payment, id: crypto.randomUUID(), amount_paise: -payment.amount_paise, occurred_at: now, recorded_at: now, source: "reversal", reversal_of: target, recorded_by: user.id, reason });
   } else {
     if (user.role !== "cashier" || !bill?.uploads?.confirmed_at) throw new Error("Cashier and submitted bill required");
+    if (!arrangementApproved(bill.settlement)) throw new Error("TL approval required");
     if (!["approve", "collect"].includes(action)) throw new Error("Unknown operation");
     if (action === "approve" && bill.approval_status === "approved") return next;
     if (bill.amount_paise === null || !bill.invoice_date || !bill.invoice_reference?.trim()) throw new Error("Upload a PDF with a readable total, date and invoice number");

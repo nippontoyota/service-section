@@ -16,10 +16,12 @@ import { readApiResponse } from "@/lib/api-response";
 import { OperationDialog, OperationStatus, useOperation } from "./operation-feedback";
 import { boundedRequest, requestJson, RequestTimeoutError } from "@/lib/operation";
 import { cashierRows, demoSettlement, normalizeSettlementRequest, releaseCleared, settlementStatus, submittedDay, sameVehicleBills } from "@/lib/settlement";
+import { ApprovalPanel, TeamLeaderWorkspace } from "./approval-panel";
+import { approvalActions, demoApproval, normalizeApprovalRequest, validateApproval, cashierAccessible } from "@/lib/approval";
 import { SettlementPanel } from "./settlement-panel";
 import "./service-desk.css";
 
-const labels = { cashier: "Cashier", service_advisor: "Service advisor", super_admin: "Super admin", security: "Security" };
+const labels = { cashier: "Cashier", service_advisor: "Service advisor", super_admin: "Super admin", security: "Security", team_leader: "Team Leader" };
 const metricNames = { paid: "Total paid bills", unpaid: "Total unpaid bills", pending: "Awaiting approval" };
 const dateTime = (date: string) => new Date(date).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const empty: Snapshot = { bills: [], payments: [], staff: [], audit: [], as_of: "" };
@@ -61,7 +63,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   const [notice, setNotice] = useState(initialError);
   const [restoring, setRestoring] = useState(demo || Boolean(initialError));
   const [refreshError, setRefreshError] = useState(initialError);
-  const [tab, setTab] = useState(initial?.profile.role === "cashier" ? "overview" : demo ? "bills" : "overview");
+  const [tab, setTab] = useState(["cashier", "team_leader"].includes(initial?.profile.role || "") ? "overview" : demo ? "bills" : "overview");
   const [metric, setMetric] = useState<Metric>("paid");
   const [query, setQuery] = useState("");
   const [customerFilter, setCustomerFilter] = useState<string | null>(null);
@@ -101,7 +103,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     if (user?.id !== profileId.current) {
       clearPreviews(); setFiles([]); setSelectedId(null); setUploadOpen(false);
       setPhones({}); setGateLinks({}); setGatePages({}); setGateDocuments({}); setTokens({});
-      setTab(user?.role === "cashier" ? "overview" : demo ? "bills" : "overview");
+      setTab(["cashier", "team_leader"].includes(user?.role || "") ? "overview" : demo ? "bills" : "overview");
       profileId.current = user?.id;
     }
     const recoveringUncertain = uncertain.current;
@@ -109,7 +111,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       const recovered = restoreDrafts({ ...snapshot, bills: snapshot.bills.filter(b => b.uploaded_by === user.id) });
       const confirmed = new Set(snapshot.bills.filter(b => b.uploads?.confirmed_at).map(b => b.upload_id));
       const retained = current.filter(f => !f.uploadId || (!confirmed.has(f.uploadId) && (!recoveringUncertain || !snapshot.drafts || recovered.some(d => d.uploadId === f.uploadId)))).map(f => {
-        const restored = recoveringUncertain && recovered.find(d => d.uploadId === f.uploadId);
+        const restored = recovered.find(d => d.uploadId === f.uploadId);
         return restored ? { ...f, ...restored, id: f.id, file: f.file, localUrl: f.localUrl } : f;
       });
       return [...retained, ...recovered.filter(d => !retained.some(f => f.uploadId === d.uploadId))];
@@ -185,7 +187,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     void links.current.get(selectedBill.upload_id, () => api("/api/desk", { action: "pdf", target: selectedBill.id })).catch(() => {});
   }, [selectedBill, api, demo]);
 
-  function save(snapshot: Snapshot) { localStorage.setItem(DEMO_KEY, JSON.stringify(snapshot)); setData(snapshot); }
+  function save(snapshot: Snapshot) { localStorage.setItem(DEMO_KEY, JSON.stringify(snapshot)); acceptSnapshot(snapshot, profile); }
   async function refreshStatus() {
     await refresh();
     uncertain.current = false; setNeedsRefresh(false);
@@ -263,7 +265,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
         const snapshot = readDemo();
         const current = snapshot.staff.find(p => p.id === profile.id);
         if (!current?.active) throw new Error("Account disabled");
-        if (["collect_batch","arrange","update_settlement","revoke_settlement"].includes(body.action)) save(demoSettlement(snapshot, current, normalizeSettlementRequest(body)));
+        if (approvalActions.includes(body.action as typeof approvalActions[number])) save(demoApproval(snapshot, current, normalizeApprovalRequest(body)));
+        else if (["collect_batch","arrange","update_settlement","revoke_settlement"].includes(body.action)) save(demoSettlement(snapshot, current, normalizeSettlementRequest(body)));
         else if (["approve","collect","reverse"].includes(body.action)) save(demoAction(snapshot, current, body.action, body.target!, body.reason, body.method as string | undefined, body.otherMethod as string | undefined, body.transactionId));
         else if (body.action === "delete_staff") {
           const next = demoDeleteStaff(snapshot, current, body.target!);
@@ -284,12 +287,13 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
           let target = snapshot.staff.find(p => p.id === body.target);
           if (body.action === "create_staff") {
             if (typeof body.password !== "string" || body.password.length < 6 || body.password.length > 8) throw new Error("Use a password between 6 and 8 characters");
+            if (body.role === "team_leader" && snapshot.staff.some(p => p.role === "team_leader" && p.active)) throw new Error("This branch already has an active Team Leader");
             if (snapshot.staff.some(p => p.staff_id === body.staffId)) throw new Error("User ID already exists");
             target = { id: crypto.randomUUID(), staff_id: String(body.staffId), full_name: String(body.fullName), role: body.role as Staff["role"], active: true, must_change_password: false };
             snapshot.staff.push(target);
           }
           if (!target || target.id === current.id) throw new Error("Select another staff account");
-          if (body.action === "toggle_staff") target.active = Boolean(body.active);
+          if (body.action === "toggle_staff") { if (body.active && target.role === "team_leader" && snapshot.staff.some(p => p.id !== target!.id && p.active && p.role === "team_leader")) throw new Error("This branch already has an active Team Leader"); target.active = Boolean(body.active); }
           else {
             const password = body.action === "create_staff" ? body.password : "Demo!" + crypto.randomUUID().slice(0,16);
             passwords[target.staff_id] = password; target.must_change_password = body.action === "reset_staff";
@@ -461,15 +465,20 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
         try {
           const itemTokens = Object.fromEntries(item.bills.map(b => [b.id, billTokens[b.id]]));
           const now = new Date().toISOString();
-          const submitted = item.bills.map(b => ({ ...b, token_number: billTokens[b.id], customer_phone: null, uploads: { ...b.uploads!, confirmed_at: now } }));
+          const submitted = item.bills.map(b => ({ ...b, token_number: billTokens[b.id], customer_phone: b.customer_phone || null, uploads: { ...b.uploads!, confirmed_at: now } }));
           if (demo) {
-            const snapshot = readDemo();
+            let snapshot = readDemo();
+            if (item.bills.some(b => !b.payment_route && !isSupportingNote(b))) throw new Error("Choose a payment route for every invoice first");
+            for (const b of item.bills) if (b.settlement) validateApproval(b.settlement, snapshot.bills.filter(x => x.settlement?.id === b.settlement!.id), snapshot.payments);
             if (snapshot.bills.some(b => b.upload_id !== item.uploadId && b.uploads?.confirmed_at && b.uploads.file_hash === item.bills[0].uploads?.file_hash)) throw new Error("This PDF has already been submitted");
             submitted.forEach(b => {
               const index = snapshot.bills.findIndex(existing => existing.id === b.id);
               snapshot.bills[index] = { ...b, customer_id: "demo-customer:" + customerKey(b) };
               snapshot.audit.unshift({ id: crypto.randomUUID(), bill_id: b.id, actor_id: profile.id, action: "submitted", created_at: now, detail: { token_number: billTokens[b.id] } });
             });
+            for (const settlement of new Map(snapshot.bills.filter(b => b.upload_id === item.uploadId && b.settlement?.state === "draft").map(b => [b.settlement!.id, b.settlement!])).values()) {
+              if (snapshot.bills.filter(b => b.settlement?.id === settlement.id).every(b => b.uploads?.confirmed_at)) snapshot = demoApproval(snapshot, profile, normalizeApprovalRequest({ action: "submit_request", requestId: crypto.randomUUID(), settlementId: settlement.id, revision: settlement.revision }));
+            }
             save(snapshot);
           } else await api("/api/uploads/" + item.uploadId + "/confirm", { tokens: itemTokens });
           submittedBills.push(...submitted);
@@ -483,7 +492,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       // A refresh failure must not turn a confirmed submission into a failed write.
       if (!demo) await refreshAfterWrite();
       if (!remaining.length) { setUploadOpen(false); setSelectedId(null); }
-      setNotice(`${pending.length - failed} PDF(s) submitted to cashier. ${failed ? `${failed} failed; retry the remaining PDFs.` : ""}`);
+      setNotice(`${pending.length - failed} PDF(s) submitted to the selected workflow. ${failed ? `${failed} failed; retry the remaining PDFs.` : ""}`);
       await feedback.finish(failed ? "failure" : "success", failed ? "Some bills were not submitted" : "Bills submitted", failed ? "Successful submissions are saved. Review the failed PDFs before retrying." : undefined);
     } finally { refreshVersion.current++; batchLock.current = false; setBatchBusy(false); }
   }
@@ -532,7 +541,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     const request = ++pdfRequest.current;
     setPdfLoading(true); setPdfError(""); setPdfUrl("");
     try {
-      let url = localUrls.current.get(bill.upload_id);
+      const cacheKey = demo || profile?.role === "service_advisor" && !bill.uploads?.confirmed_at ? bill.upload_id : bill.id;
+      let url = localUrls.current.get(cacheKey);
       if (!url) {
         let blob: Blob;
         if (demo && !bill.reference_file) {
@@ -540,13 +550,13 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
           if (!stored) throw new Error("This PDF is not stored in this browser. Please upload the original again.");
           blob = stored;
         } else {
-          const link = demo ? { url: "/api/demo/reference-bills?file=" + encodeURIComponent(bill.reference_file || "") } : await links.current.get(bill.upload_id, () => api("/api/desk", { action: "pdf", target: bill.id }));
+          const link = demo ? { url: "/api/demo/reference-bills?file=" + encodeURIComponent(bill.reference_file || "") } : await links.current.get(bill.id, () => api("/api/desk", { action: "pdf", target: bill.id }));
           if (request !== pdfRequest.current) return;
           const started = "pdf-download-start:" + request;
           performance.mark(started);
           blob = await boundedRequest(async signal => {
             const response = await fetch(link.url, { signal });
-            if (!response.ok) { links.current.delete(bill.upload_id); throw new Error("PDF could not be downloaded. Please retry."); }
+            if (!response.ok) { links.current.delete(bill.id); throw new Error("PDF could not be downloaded. Please retry."); }
             return response.blob();
           });
           performance.measure("pdf-download", started); performance.clearMarks(started);
@@ -556,7 +566,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
           }
         }
         if (request !== pdfRequest.current) return;
-        url = URL.createObjectURL(blob); localUrls.current.set(bill.upload_id, url);
+        url = URL.createObjectURL(blob); localUrls.current.set(cacheKey, url);
       }
       if (request !== pdfRequest.current) return;
       pdfDisplayStart.current = "pdf-display-start:" + request;
@@ -566,7 +576,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   }
 
   function submitLabel(items: UploadFile[]) {
-    return items.length > 1 ? "Submit all to cashier" : "Submit to cashier";
+    return items.length > 1 ? "Submit all reviewed bills" : "Submit reviewed bills";
   }
 
   if (restoring && !profile) return <DeskShell><OperationDialog operation={feedback.operation} onDismiss={feedback.dismiss}/><OperationStatus operation={feedback.operation}/>{refreshError ? <div role="alert"><p>{refreshError}</p><button onClick={() => void perform(refreshStatus)}>Retry workspace</button></div> : undefined}</DeskShell>;
@@ -584,9 +594,9 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     </section>
     <section className="sd-login-panel"><div className="sd-login-card"><div className="sd-login-product"><Brand /><span>THE SERVICE WORKSPACE</span></div><span className="sd-eyebrow">{demo ? "LOCAL PDF TESTING · DEMO ACCOUNTS" : "NIPPON TOYOTA · STAFF ACCESS"}</span><h2>Welcome to your desk.</h2><p>Sign in with your individual staff account.</p>
       {!demo && !ready ? <p className="sd-alert">Staff login needs Supabase configuration. Follow the setup instructions in README.md.</p> : <form onSubmit={login}>
-        <label>User ID<input disabled={busy} name="staffId" placeholder="e.g. cashier01" autoComplete="username" required /></label>
-        <label>Password<span className="sd-password-field"><input disabled={busy} name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" required /><button className="sd-password-toggle" type="button" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={19}/> : <Eye size={19}/>}</button></span></label>
-        <button className="sd-primary" disabled={busy}>{busy ? "Signing in…" : "Sign in"}<ArrowUpRight size={18}/></button>
+        <label>User ID<input disabled={busy || Boolean(authTransition)} name="staffId" placeholder="e.g. cashier01" autoComplete="username" required /></label>
+        <label>Password<span className="sd-password-field"><input disabled={busy || Boolean(authTransition)} name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" required /><button className="sd-password-toggle" type="button" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={19}/> : <Eye size={19}/>}</button></span></label>
+        <button className="sd-primary" disabled={busy || Boolean(authTransition)}>{busy ? "Signing in…" : "Sign in"}<ArrowUpRight size={18}/></button>
       </form>}
       {notice && <p role="alert" className="sd-alert">{notice}</p>}
       {needsRefresh && <button onClick={() => void perform(refreshStatus)}>Refresh status</button>}
@@ -601,7 +611,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   const visible: Snapshot = profile.role === "service_advisor" ? { ...data, bills: data.bills.filter(b => b.uploaded_by === profile.id) } : data;
   const summary = report(visible, advisor);
   const daily = profile.role === "cashier" ? cashierDailyReport(visible, analyticsDay) : null;
-  const selected = preview.find(b => b.id === selectedId) ?? data.bills.find(b => b.id === selectedId);
+  const selected = data.bills.find(b => b.id === selectedId) ?? preview.find(b => b.id === selectedId);
   const person = (id: string | null) => data.staff.find(p => p.id === id)?.full_name ?? (id ? "Staff member" : "Deleted staff account");
   const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : settlementStatus(b, data.payments);
   const list = profile.role === "cashier" ? cashierRows(visible, tab, analyticsDay, query) : tab === "bills" || profile.role === "service_advisor" ? visible.bills : summary[metric];
@@ -613,22 +623,22 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
 
   return <div className="sd-app"><OperationDialog operation={feedback.operation} onDismiss={feedback.dismiss}/>
     <aside className="sd-sidebar"><Brand/><span className="sd-eyebrow">{labels[profile.role]} WORKSPACE</span><nav>
-      <button aria-current={tab === "overview" ? "page" : undefined} onClick={() => { setTab("overview"); setQuery(""); setCustomerFilter(null); }}><LayoutDashboard size={19}/>{profile.role === "service_advisor" ? "Upload & my bills" : "Overview"}</button>
-      <button aria-current={tab === (profile.role === "cashier" ? "archive" : "bills") ? "page" : undefined} onClick={() => { setTab(profile.role === "cashier" ? "archive" : "bills"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>{profile.role === "cashier" ? "Archive" : "Bill archive"}<span>{profile.role === "cashier" ? cashierRows(visible, "archive", analyticsDay, "").length : visible.bills.length}</span></button>
+      <button aria-current={tab === "overview" ? "page" : undefined} onClick={() => { setTab("overview"); setQuery(""); setCustomerFilter(null); }}><LayoutDashboard size={19}/>{profile.role === "team_leader" ? "Approvals & follow-up" : profile.role === "service_advisor" ? "Upload & my bills" : "Overview"}</button>
+      {profile.role !== "team_leader" && <button aria-current={tab === (profile.role === "cashier" ? "archive" : "bills") ? "page" : undefined} onClick={() => { setTab(profile.role === "cashier" ? "archive" : "bills"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>{profile.role === "cashier" ? "Archive" : "Bill archive"}<span>{profile.role === "cashier" ? cashierRows(visible, "archive", analyticsDay, "").length : visible.bills.length}</span></button>}
       {profile.role === "cashier" && <button aria-current={tab === "receivables" ? "page" : undefined} onClick={() => { setTab("receivables"); setQuery(""); setCustomerFilter(null); }}><FileText size={19}/>Receivables<span>{cashierRows(visible, "receivables", analyticsDay, "").length}</span></button>}
       {profile.role === "super_admin" && <><button aria-current={tab === "staff" ? "page" : undefined} onClick={() => setTab("staff")}><Users size={19}/>Staff accounts</button><button aria-current={tab === "activity" ? "page" : undefined} onClick={() => setTab("activity")}><ShieldCheck size={19}/>Activity log</button></>}
     </nav><div className="sd-sidebar-bottom"><span className="sd-retained"><ShieldCheck size={18}/>Permanent bill history</span><strong>{profile.full_name}</strong><small>{profile.staff_id} · {labels[profile.role]}</small><button className="sd-plain" disabled={busy || Boolean(authTransition)} onClick={() => void logout()}><LogOut size={16}/>Sign out</button></div></aside>
     <main className="sd-main"><OperationStatus operation={feedback.operation}/>
       {demo && <div className="sd-demo-banner">LOCAL PDF WORKSPACE <span>Supplied PDFs and local uploads · no Supabase connection</span></div>}
-      <header className="sd-header"><div><span className="sd-eyebrow">BILLDESK / {labels[profile.role].toUpperCase()}</span><h1>{tab === "staff" ? "Your people. Their access." : tab === "activity" ? "A record of every action." : tab === "archive" ? "Archive" : tab === "receivables" ? "Receivables" : tab === "bills" ? "The bill archive." : profile.role === "service_advisor" ? "Send bills to the counter." : "Overview"}</h1><p>{profile.role === "service_advisor" ? "Choose a PDF. Amounts and details are read automatically." : profile.role === "cashier" ? tab === "archive" ? "Paid bills and supporting documents." : tab === "receivables" ? "Collect outstanding insurance and credit balances, and record follow-ups." : "Today’s submissions. Search to find bills from any date." : "Track paid bills, unpaid bills, and bills awaiting approval."}</p></div><button className="sd-secondary" disabled={busy} onClick={() => void perform(refreshStatus)}>Refresh</button></header>
+      <header className="sd-header"><div><span className="sd-eyebrow">BILLDESK / {labels[profile.role].toUpperCase()}</span><h1>{profile.role === "team_leader" ? "Review. Approve. Follow up." : tab === "staff" ? "Your people. Their access." : tab === "activity" ? "A record of every action." : tab === "archive" ? "Archive" : tab === "receivables" ? "Receivables" : tab === "bills" ? "The bill archive." : profile.role === "service_advisor" ? "Prepare bills for payment." : "Overview"}</h1><p>{profile.role === "service_advisor" ? "Choose a PDF. Amounts and details are read automatically." : profile.role === "cashier" ? tab === "archive" ? "Paid bills and supporting documents." : tab === "receivables" ? "Collect outstanding insurance and credit balances, and record follow-ups." : "Today’s submissions. Search to find bills from any date." : profile.role === "team_leader" ? "Approve insurance and credit requests, then track payment recovery." : "Track paid bills, unpaid bills, and bills awaiting approval."}</p></div><button className="sd-secondary" disabled={busy} onClick={() => void perform(refreshStatus)}>Refresh</button></header>
       {(refreshError || needsRefresh) && <div className="sd-notice" role="alert">{needsRefresh ? "Result uncertain. Refresh status before retrying." : refreshError}<button disabled={busy} onClick={() => void perform(refreshStatus)}>Retry refresh</button></div>}
       {notice && <div className="sd-notice" role="status">{notice.includes("WhatsApp") && <WhatsAppIcon/>}{notice}<button aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}
       {tab === "staff" && profile.role === "super_admin" ? <section className="sd-panel">
         <h2>Create a staff account</h2><form ref={staffForm} className="sd-staff-form" onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void action({ action: "create_staff", staffId: f.get("staffId"), fullName: f.get("fullName"), role: f.get("role"), password: f.get("password") }); }}>
-          <label>Full name<input disabled={busy} name="fullName" maxLength={100} required/></label><label>User ID<input disabled={busy} name="staffId" autoComplete="off" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Password<input disabled={busy} name="password" type="password" minLength={6} maxLength={8} placeholder="6–8 characters" autoComplete="new-password" required/></label><label>Role<select disabled={busy} name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option><option value="security">Security</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
+          <label>Full name<input disabled={busy} name="fullName" maxLength={100} required/></label><label>User ID<input disabled={busy} name="staffId" autoComplete="off" pattern="[a-z0-9_]{3,40}" title="3–40 lowercase letters, numbers or underscores" required/></label><label>Password<input disabled={busy} name="password" type="password" minLength={6} maxLength={8} placeholder="6–8 characters" autoComplete="new-password" required/></label><label>Role<select disabled={busy} name="role"><option value="service_advisor">Service advisor</option><option value="cashier">Cashier</option><option value="super_admin">Super admin</option><option value="security">Security</option><option value="team_leader">Team Leader</option></select></label><button className="sd-primary" disabled={busy}>Create account</button>
         </form>{staffPassword && <div className="sd-alert"><strong>Share privately; shown for this session only.</strong><p><code>{staffPassword}</code></p><button onClick={() => setStaffPassword("")}>Dismiss</button></div>}
         <div className="sd-table-wrap"><table><thead><tr><th>Name / User ID</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{data.staff.map(p => <tr key={p.id}><td><strong>{p.full_name}</strong><small>{p.staff_id}</small></td><td>{labels[p.role]}</td><td>{p.active ? "Active" : "Disabled"}{p.must_change_password ? " · Temporary password" : ""}</td><td>{p.id !== profile.id && <div className="sd-actions"><button disabled={busy} onClick={() => void action({ action: "reset_staff", target: p.id })}>Reset password</button><button disabled={busy} onClick={() => void action({ action: "toggle_staff", target: p.id, active: !p.active })}>{p.active ? "Disable" : "Enable"}</button>{p.staff_id !== "admin01" && <button className="sd-danger" disabled={busy} onClick={() => { if (window.confirm(`Permanently delete ${p.full_name} (${p.staff_id})? Their account and access will be removed. Bill and collection history will be retained.`)) void action({ action: "delete_staff", target: p.id }); }}><Trash2 size={16}/>Delete account</button>}</div>}</td></tr>)}</tbody></table></div>
-      </section> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}{settlementAudit(a.detail) ? " · " + settlementAudit(a.detail) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
+      </section> : profile.role === "team_leader" ? <TeamLeaderWorkspace snapshot={visible} onSelect={selectBill}/> : tab === "activity" ? <section className="sd-panel"><h2>Staff activity</h2>{data.audit.length ? data.audit.map(a => <div className="sd-audit-row" key={a.id}><ShieldCheck size={17}/><div><strong>{a.action.replaceAll("_"," ")} · {person(a.actor_id)}</strong><small>{dateTime(a.created_at)}{a.detail.reason ? " · " + String(a.detail.reason) : ""}{settlementAudit(a.detail) ? " · " + settlementAudit(a.detail) : ""}</small></div>{a.bill_id && <button onClick={() => { selectBill(a.bill_id); }}>Open bill <ChevronRight size={14}/></button>}</div>) : <p>No activity recorded yet.</p>}</section> : <>
         {profile.role === "service_advisor" && <><div className="sd-upload-launch"><button className="sd-primary" onClick={() => setUploadOpen(true)}><Upload size={18}/>Upload bills{files.length ? ` (${files.length})` : ""}</button></div></>}
         {daily && tab === "overview" && <section aria-label="Daily analytics">
           <div className="sd-filters"><label>Submission date<input type="date" value={analyticsDay} onChange={e => setAnalyticsDay(e.target.value || indiaDate())}/></label><button className="sd-plain" onClick={() => setAnalyticsDay(indiaDate())}>Today</button><small>By submission date · current balances · INR</small></div>
@@ -655,7 +665,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       </>}
     </main>
     {uploadOpen && <UploadDialog onClose={() => { if (!batchLock.current && !feedback.lock.current) setUploadOpen(false); }} footer={<div className="sd-actions sd-upload-footer"><button className="sd-secondary" disabled={batchBusy || busy || needsRefresh || !files.some(f => !f.bills.length && (f.state === "selected" || f.state === "failed") && (f.file || f.stored))} onClick={() => void uploadFiles()}>Upload &amp; read all</button><button className="sd-primary" disabled={batchBusy || busy || needsRefresh || !files.some(f => f.state === "ready")} onClick={() => void submit()}>{submitLabel(files.filter(f => f.state === "ready"))}</button>{needsRefresh && <button onClick={() => void perform(refreshStatus)}>Refresh status</button>}<OperationStatus operation={feedback.operation}/></div>}>
-      <header className="sd-upload-heading"><div><p>Review each bill, then submit to the cashier. Up to 10 PDFs · 10 MB each.</p></div>
+      <header className="sd-upload-heading"><div><p>Choose a payment route for every bill. Save insurance or credit forms before submitting. Up to 10 PDFs · 10 MB each.</p></div>
         <label className="sd-upload-button"><Upload size={20}/>Add PDFs<input aria-label="Add PDFs" type="file" accept=".pdf,application/pdf" multiple disabled={batchBusy || busy} onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }}/></label>
       </header>
       <p className="sd-upload-summary" role="status">{files.filter(f => f.state === "ready").length} ready · {files.filter(f => f.error).length} failed · {files.length} / 10 PDFs</p>
@@ -677,6 +687,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
           <div className="sd-review-heading"><div><small>Invoice</small><h3 className="sd-review-reference">{b.invoice_reference || "Invoice number not read"}</h3></div><div className="sd-review-amount"><small>Bill amount</small><strong>{billAmount(b)}</strong></div></div>
           <div className="sd-review-customer"><small>Customer</small><strong>{b.customer_name || "Customer not read"}</strong></div>
           <dl className="sd-review-fields"><div><dt>Vehicle</dt><dd>{b.vehicle_no_display || "Vehicle not read"}</dd></div><div><dt>Invoice date</dt><dd>{b.invoice_date || "Date not read"}</dd></div></dl>
+          <button className="sd-secondary" disabled={busy || batchBusy} onClick={() => selectBill(b.id)}>{b.payment_route ? "Review " + b.payment_route + " details" : "Choose payment route"}</button>
           <label>Token number (optional)<input value={tokens[b.id] ?? b.token_number ?? ""} onChange={e => setTokens(current => ({ ...current, [b.id]: e.target.value }))} maxLength={30} placeholder="Enter token from your token machine" disabled={batchBusy || busy}/></label>
           <small className="sd-review-evidence">{b.amount_evidence}</small>
           {b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
@@ -689,7 +700,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     </UploadDialog>}
     {selected && <BillDialog bill={selected} onClose={() => { if (feedback.lock.current || batchLock.current) return; pdfRequest.current++; setSelectedId(null); setPdfUrl(""); setPdfLoading(false); setPdfError(""); }}><OperationStatus operation={feedback.operation}/><div className="sd-detail-heading"><span className="sd-eyebrow">ORIGINAL BILL & ACTIVITY</span><h2>{selected.invoice_reference || "Invoice review"}</h2><p>{selected.customer_name} · {selected.vehicle_no_display}</p></div>
       {pdfLoading && <p role="status">Loading PDF…</p>}{pdfError && <div role="alert" className="sd-warning">{pdfError}<button onClick={() => void openPdf(selected)}>Retry PDF</button></div>}
-      {pdfUrl && <div className="sd-pdf"><a href={pdfUrl + "#page=" + selected.page_from} target="_blank" rel="noreferrer">Open original PDF in a new tab to print ↗</a><iframe onLoad={() => { performance.measure("pdf-display", pdfDisplayStart.current); setPdfLoading(false); }} title="Original bill PDF" src={pdfUrl + "#page=" + selected.page_from}/></div>}
+      {pdfUrl && <div className="sd-pdf"><a href={pdfUrl + "#page=" + (demo || !selected.uploads?.confirmed_at ? selected.page_from : 1)} target="_blank" rel="noreferrer">Open original PDF in a new tab to print ↗</a><iframe onLoad={() => { performance.measure("pdf-display", pdfDisplayStart.current); setPdfLoading(false); }} title="Original bill PDF" src={pdfUrl + "#page=" + (demo || !selected.uploads?.confirmed_at ? selected.page_from : 1)}/></div>}
       <div className="sd-detail-totals sd-full-total"><div><small>Service bill amount · from PDF</small><strong>{billAmount(selected)}</strong></div><span className={"sd-status " + (isSupportingNote(selected) ? "is-note" : isPaid(selected,data.payments) ? "is-paid" : "")}>{billState(selected)}</span></div>
       <dl className="sd-details"><div><dt>Token number</dt><dd>{selected.token_number || "Not assigned"}</dd></div><div><dt>Original file</dt><dd>{selected.uploads?.original_filename || "—"}</dd></div><div><dt>Document type</dt><dd>{billType(selected)}</dd></div><div><dt>Job / repair reference</dt><dd>{selected.job_card_reference || "Not read"}</dd></div><div><dt>Customer ID from PDF</dt><dd>{selected.customer_reference || "Not stated / not read"}</dd></div><div><dt>Customer / vehicle owner</dt><dd>{selected.customer_name || "Not read"}</dd></div><div><dt>Billed to</dt><dd>{selected.field_confidence?.document?.billedTo || selected.customer_name || "Not read"}</dd></div><div><dt>Invoice date</dt><dd>{selected.invoice_date || "Not read"}</dd></div><div><dt>VIN</dt><dd>{selected.vin || "Not read"}</dd></div><div><dt>Uploaded by</dt><dd>{selected.reference_file ? "Local PDF import" : person(selected.uploaded_by)}</dd></div><div><dt>Approved by</dt><dd>{selected.approval_status === "approved" ? person(selected.approved_by) : isSupportingNote(selected) ? "Supporting note — no collection" : "Awaiting cashier"}</dd></div><div><dt>PDF pages</dt><dd>{selected.page_from}–{selected.page_to}</dd></div><div><dt>Status</dt><dd>{billState(selected)}</dd></div></dl>
       <div className="sd-extraction"><strong>Read directly from PDF</strong><p>{selected.amount_evidence || "No readable total found"}</p>{selected.field_confidence?.document?.typeEvidence && <p>{selected.field_confidence.document.typeEvidence}</p>}<small>{isSupportingNote(selected) ? "Supporting service note. No monetary total is stated; this document is retained with the customer’s bills and excluded from financial totals." : "Invoice totals come from the PDF. Collections and approved arrangements are recorded separately."}</small></div>
@@ -700,8 +711,9 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
         {profile.role === "service_advisor" && selected.uploaded_by === profile.id && !selected.uploads?.confirmed_at && selected.approval_status === "pending" && <button className="sd-danger" disabled={busy || batchBusy} onClick={() => void deleteBill(selected)}><Trash2 size={16}/>Delete bill</button>}
         {!demo && profile.role === "super_admin" && selected.approval_status === "pending" && selected.amount_paise === null && !isSupportingNote(selected) && <button disabled={busy} onClick={() => void action({action:"reextract",target:selected.id})}>Re-read original PDF</button>}
       </div>
+      {!isSupportingNote(selected) && <ApprovalPanel key={selected.id + ":" + (selected.settlement?.revision || 0) + ":" + (selected.payment_route || "")} bill={selected} snapshot={{ ...data, bills: [...new Map([...preview, ...data.bills].map(b => [b.id, b])).values()] }} actor={profile} busy={busy || needsRefresh} onSubmit={action} demo={demo}/>}
       {["cashier", "super_admin"].includes(profile.role) && selected.uploads?.confirmed_at && !isSupportingNote(selected) && <SettlementPanel key={selected.id} bill={selected} snapshot={data} actor={profile} busy={busy || needsRefresh} onSubmit={action} onOpenBill={selectBill}/>}
-      {profile.role === "cashier" && selected.amount_paise === 0 && !isPaid(selected, data.payments) && <button disabled={busy} onClick={() => void action({ action: "collect", target: selected.id, method: "Cash" })}>Clear zero-value invoice</button>}
+      {profile.role === "cashier" && cashierAccessible(selected) && selected.amount_paise === 0 && !isPaid(selected, data.payments) && <button disabled={busy} onClick={() => void action({ action: "collect", target: selected.id, method: "Cash" })}>Clear zero-value invoice</button>}
       {profile.role === "cashier" && selected.uploads?.confirmed_at && !selected.gate_completed && releaseCleared(selected, data.payments) && <section className="sd-related"><h3>Vehicle gate pass</h3><p>All submitted bills for this customer and vehicle must be paid or covered by a recorded release arrangement.</p>{sameVehicleBills(selected, data.bills).filter(b => !b.gate_completed).map(b => <div className="sd-gate-fields" key={b.id}><label>R.O./W.O. No. · {b.invoice_reference}<input maxLength={100} disabled={busy} value={gateDocuments[b.id]?.jobNumber ?? b.job_card_reference ?? ""} onChange={e => setGateDocuments(current => ({ ...current, [b.id]: { jobNumber: e.target.value, jobDate: current[b.id]?.jobDate || "" } }))}/></label><label>R.O./W.O. date<input type="date" disabled={busy} value={gateDocuments[b.id]?.jobDate || ""} onChange={e => setGateDocuments(current => ({ ...current, [b.id]: { jobNumber: current[b.id]?.jobNumber ?? b.job_card_reference ?? "", jobDate: e.target.value } }))}/></label></div>)}<label><span className="sd-whatsapp-label"><WhatsAppIcon/>Customer WhatsApp number</span><input type="tel" autoComplete="off" placeholder="Enter customer WhatsApp number" maxLength={40} disabled={busy} value={phoneFor(selected)} onChange={e => { setPhones(current => ({ ...current, [selected.id]: e.target.value })); setGateLinks(current => ({ ...current, [selected.id]: "" })); }}/></label><div className="sd-actions"><button className="sd-primary" disabled={demo || busy} onClick={() => issueGatePass(selected)}><WhatsAppIcon/>Issue gate pass</button>{gatePages[selected.id] && <a className="sd-secondary" href={gatePages[selected.id]} target="_blank" rel="noreferrer">View / print gate pass</a>}{gateLinks[selected.id] && <a className="sd-whatsapp-action" href={gateLinks[selected.id]} target="_blank" rel="noreferrer" aria-label="Open gate pass in WhatsApp"><WhatsAppIcon/></a>}</div></section>}
       {selected.gate_completed && <p className="sd-muted">Vehicle exit already recorded for this bill.</p>}
       <h3>Collection history</h3>{data.payments.filter(p => p.bill_id === selected.id && !p.is_archived).map(p => <div className="sd-payment" key={p.id}><div><strong>{money(p.amount_paise)}</strong><small>{dateTime(p.occurred_at)} · {person(p.recorded_by)} · {p.method} · {p.source !== "reversal" ? (p.payer === "insurer" ? "Insurer collection" : "Customer collection") : "Collection reversed"}</small>{p.transaction_id && <small>{paymentReferenceLabel(p.method) || "Transaction ID"}: {p.transaction_id}</small>}{p.collection_id && <small>Collection: {p.collection_id}</small>}{p.reason && <p>{p.reason}</p>}</div>{profile.role === "super_admin" && p.source !== "reversal" && !data.payments.some(r => r.reversal_of === p.id) && <button disabled={busy} onClick={() => { const reason = window.prompt("Why is this payment entry incorrect? This is a correction, not a customer refund."); if (reason) void action({ action: "reverse", target: p.id, reason }); }}>Reverse entry</button>}</div>)}

@@ -23,29 +23,20 @@ test("today uses submission date, search spans all dates and repeated tokens sta
  assert.equal(sameVehicleBills(data.bills[0], data.bills).length, 1);
 });
 
-test("credit and insurance record actual collections and release permissions separately", () => {
+test("legacy insurance release permission is preserved and respects payment reversal", () => {
  let data = fixtureSnapshot(); data.payments = [];
- const cashier = data.staff.find(p => p.role === "cashier")!, admin = data.staff.find(p => p.role === "super_admin")!;
- const bill = data.bills[0];
- const request = normalizeSettlementRequest({ action: "arrange", requestId: crypto.randomUUID(), entries: [{ billId: bill.id, amountPaise: 200000, customerSharePaise: 200000 }], kind: "insurance", payer: "customer", details: { insurer: "Test insurer" }, method: "Cash" });
- data = demoSettlement(data, cashier, request);
- assert.deepEqual(demoSettlement(data, cashier, request), data);
+ const bill = data.bills[0], cashier = data.staff.find(p => p.role === "cashier")!, admin = data.staff.find(p => p.role === "super_admin")!;
+ bill.settlement = { id: crypto.randomUUID(), number: 1, kind: "insurance", state: "legacy_approved", details: { insurer: "Legacy insurer" }, revoked: false, created_at: new Date().toISOString(), recorded_by: cashier.id };
+ bill.customer_share_paise = 200000;
+ data = demoSettlement(data, cashier, normalizeSettlementRequest({ action: "collect_batch", requestId: crypto.randomUUID(), entries: [{ billId: bill.id, amountPaise: 200000 }], payer: "customer", details: {}, method: "Cash" }));
  assert.equal(payerBalance(data.bills[0], data.payments), 0);
  assert.equal(payerBalance(data.bills[0], data.payments, "insurer"), 1800000);
  assert.equal(balance(data.bills[0], data.payments), 1800000);
  assert.equal(releaseCleared(data.bills[0], data.payments), true);
  assert.ok(cashierRows(data, "receivables", indiaDate(), "").some(b => b.id === bill.id));
- assert.ok(!cashierRows(data, "archive", indiaDate(), "").some(b => b.id === bill.id));
  assert.equal(cashierDailyReport(data, indiaDate()).collectedAmount, 200000);
  data = demoAction(data, admin, "reverse", data.payments[0].id, "Wrong entry");
  assert.equal(releaseCleared(data.bills[0], data.payments), false);
- const creditBill = data.bills[1];
- const credit = normalizeSettlementRequest({ action: "arrange", requestId: crypto.randomUUID(), entries: [{ billId: creditBill.id, amountPaise: 100000 }], kind: "credit", payer: "customer", method: "Cash", details: { approvedBy: "Manager", approvedOn: "2026-11-20", dueDate: "2026-12-01" } });
- data = demoSettlement(data, cashier, credit);
- assert.equal(releaseCleared(data.bills[1], data.payments), true);
- assert.equal(data.bills[1].credit_limit_paise, creditBill.amount_paise! - 100000);
- data = demoAction(data, admin, "reverse", data.payments.at(-1)!.id, "Deposit incorrect");
- assert.equal(releaseCleared(data.bills[1], data.payments), false, "reversal cannot enlarge authorized credit");
 });
 
 test("combined demo collection is atomic and validates amounts, references and approvals", () => {
@@ -68,7 +59,7 @@ test("combined demo collection is atomic and validates amounts, references and a
  assert.deepEqual(next.bills[1], data.bills[1], "unselected bill stays unchanged");
  assert.deepEqual(demoSettlement(next, cashier, normalizeSettlementRequest(body)), next, "retry does not duplicate payments");
  const credit = { ...body, action: "arrange", kind: "credit", details: { approvedBy: "Manager", approvedOn: "2026-11-28", dueDate: "2026-12-01" } };
- assert.throws(() => demoSettlement(data, cashier, normalizeSettlementRequest(credit)), /one customer and vehicle/);
+ assert.throws(() => demoSettlement(data, cashier, normalizeSettlementRequest(credit)), /Refresh/);
  assert.throws(() => normalizeSettlementRequest({ ...body, transactionId: " " }), /required/);
  assert.throws(() => normalizeSettlementRequest({ ...body, action: "arrange", kind: "credit" }), /approver/);
  assert.throws(() => normalizeSettlementRequest({ ...body, entries: [body.entries[0], body.entries[0]] }), /only be selected once/);

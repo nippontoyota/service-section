@@ -458,3 +458,35 @@
 .sd-collection-bills .sd-bill-check{flex:1 1 240px;cursor:pointer}
 .sd-collection-bills .sd-bill-check input{flex-shrink:0}
 .sd-collection-bills .sd-bill-check span{min-width:0;overflow-wrap:anywhere}
+
+/* TL forms use the existing desk palette and ledger typography. */
+.sd-approval-sheet { margin: 22px 0; padding: 22px; border: 1px solid var(--border, #dfe3e8); border-top: 3px solid #b5121b; border-radius: 12px; background: #fff; }
+.sd-approval-sheet h3 { margin: 6px 0 14px; }
+.sd-approval-sheet form { display: grid; gap: 16px; margin: 16px 0; }
+.sd-approval-invoice { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 14px 0; border-bottom: 1px solid #e5e7eb; }
+.sd-approval-invoice > label:first-child { flex: 1; min-width: 180px; }
+.sd-approval-invoice input[type=checkbox] { width: 18px; height: 18px; margin-right: 8px; }
+.sd-approval-invoice small { display: block; color: #667085; }
+.sd-verified-stamp { display: grid; gap: 4px; width: fit-content; max-width: 100%; padding: 14px 20px; margin: 14px 0; border: 2px solid #19724d; border-radius: 5px; color: #145c40; background: #f4fbf7; }
+.sd-verified-stamp > strong { letter-spacing: .12em; font-size: 18px; }
+.sd-verified-stamp.is-revoked { color: #a21c27; border-color: #a21c27; background: #fff6f6; }
+.sd-followups { border-top: 1px solid #e5e7eb; margin-top: 20px; padding-top: 16px; }
+.sd-tl-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
+.sd-tl-tabs button { display: flex; gap: 12px; padding: 12px 16px; }
+.sd-tl-tabs button[aria-pressed=true] { background: #b5121b; color: white; border-color: #b5121b; }
+.sd-tl-workspace .sd-filters { flex-wrap: wrap; }
+@media (max-width: 640px) { .sd-approval-sheet { padding: 14px; } .sd-approval-invoice { align-items: stretch; } .sd-tl-tabs button { flex: 1 1 140px; } }
+@media print { .sd-approval-sheet { border: 0; padding: 0; } .sd-verified-stamp { break-inside: avoid; print-color-adjust: exact; } .sd-approval-sheet form, .sd-followups { display: none; } }
+@media print {
+ body:has(.sd-approval-sheet) .sd-app { display: block; height: auto; min-height: 0; }
+ .sd-app:has(.sd-approval-sheet) > :not(.sd-dialog:has(.sd-approval-sheet)),
+ .sd-dialog:has(.sd-approval-sheet) > .sd-dialog-header,
+ .sd-dialog-body:has(.sd-approval-sheet) > :not(.sd-approval-sheet) { display: none !important; }
+ .sd-dialog:has(.sd-approval-sheet) { position: static !important; margin: 0 !important; transform: none !important; width: 100% !important; max-width: none !important; max-height: none !important; height: auto !important; overflow: visible !important; border: 0 !important; display: block !important; }
+ .sd-dialog:has(.sd-approval-sheet) .sd-dialog-body { overflow: visible !important; padding: 0 !important; }
+ .sd-approval-sheet { margin: 0; color: black; }
+ .sd-approval-sheet .sd-no-print { display: none !important; }
+}
+@media print { @page { size: A4 portrait; margin: 12mm; } }
+.sd-approval-sheet textarea { width: 100%; min-height: 80px; border: 1px solid var(--sd-line); border-radius: 8px; padding: 11px 13px; font: inherit; resize: vertical; }
+@media print { .sd-approval-sheet, .sd-approval-sheet * { visibility: visible !important; } }

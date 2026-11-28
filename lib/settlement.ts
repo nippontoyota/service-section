@@ -1,11 +1,12 @@
+import { arrangementApproved, approvalState, cashierAccessible, type ApprovalEntry, type ApprovalState, type Followup } from "./approval";
 import { balance, collected, customerKey, indiaDate, isPaid, isSupportingNote, paymentMethod, transactionId, type DeskBill, type Payment, type Snapshot, type Staff } from "./desk";
 
 export type SettlementDetails = {
-  insurer?: string; contactPerson?: string; contactNumber?: string; responsibleStaff?: string;
+  insurer?: string; contactPerson?: string; contactNumber?: string; responsibleStaff?: string; responsibleStaffId?: string;
   approvedBy?: string; approvedOn?: string; dueDate?: string; remarks?: string;
   followup1?: string; followup2?: string;
 };
-export type Settlement = { id: string; number: number; kind: "insurance" | "credit"; details: SettlementDetails; revoked: boolean; created_at: string; recorded_by: string | null };
+export type Settlement = { state?: ApprovalState; revision?: number; advisor_name?: string; approved_name?: string; approved_by?: string; approved_at?: string; acknowledged_at?: string; return_reason?: string; proposal?: ApprovalEntry[]; followups?: Followup[]; submitted_snapshot?: unknown; approved_snapshot?: unknown; id: string; number: number; kind: "insurance" | "credit"; details: SettlementDetails; revoked: boolean; created_at: string; recorded_by: string | null };
 export type SettlementEntry = { billId: string; amountPaise: number; customerSharePaise?: number };
 export type SettlementRequest = {
   action: "collect_batch" | "arrange" | "update_settlement" | "revoke_settlement";
@@ -25,13 +26,15 @@ export function payerBalance(bill: DeskBill, payments: Payment[], payer: "custom
   return (payer === "customer" ? share : insurance ? bill.amount_paise - share : 0) - payerCollected(bill, payments, payer);
 }
 export function releaseCleared(bill: DeskBill, payments: Payment[]) {
-  if (!bill.uploads?.confirmed_at) return false;
+  if (!bill.uploads?.confirmed_at || !arrangementApproved(bill.settlement) || (bill.settlement?.state === "approved" && !bill.settlement.acknowledged_at)) return false;
   if (isSupportingNote(bill) || isPaid(bill, payments)) return true;
   if (bill.approval_status !== "approved" || !bill.settlement || bill.settlement.revoked || bill.amount_paise === null) return false;
   return bill.settlement.kind === "insurance" ? payerBalance(bill, payments) === 0
     : balance(bill, payments)! <= (bill.credit_limit_paise ?? -1);
 }
 export function settlementStatus(bill: DeskBill, payments: Payment[]) {
+  if (bill.settlement && !arrangementApproved(bill.settlement)) return ({ draft: "Request draft", pending: "Awaiting TL approval", returned: "Returned by TL", revoked: "Approval revoked" } as Record<string, string>)[approvalState(bill.settlement)] || "Awaiting TL approval";
+  if (bill.settlement?.state === "approved" && !bill.settlement.acknowledged_at) return "TL approved · awaiting cashier";
   if (isSupportingNote(bill)) return "No collection required";
   if (isPaid(bill, payments)) return "Paid in full";
   if (bill.settlement?.revoked) return "Approval revoked";
@@ -52,7 +55,7 @@ export function sameCustomerBills(selected: DeskBill, bills: DeskBill[]) {
 export function cashierRows(snapshot: Snapshot, tab: string, day: string, query: string) {
   const search = query.trim().toLowerCase();
   return snapshot.bills.filter(b => {
-    if (!b.uploads?.confirmed_at) return false;
+    if (!b.uploads?.confirmed_at || !cashierAccessible(b)) return false;
     const paid = isPaid(b, snapshot.payments) || isSupportingNote(b);
     const inView = tab === "archive" ? paid : tab === "receivables" ? !paid && Boolean(b.settlement) : !paid && !releaseCleared(b, snapshot.payments);
     // Search spans submitted history, including released receivables and paid bills.
@@ -101,35 +104,25 @@ export function normalizeSettlementRequest(body: Record<string, unknown>): Settl
 }
 
 export function demoSettlement(snapshot: Snapshot, actor: Staff, request: SettlementRequest): Snapshot {
+  if (request.action === "arrange" || request.action === "update_settlement") throw new Error("Refresh the workspace: advisors prepare requests and the TL approves them");
   if (!actor.active || actor.must_change_password || !["cashier", "super_admin"].includes(actor.role)) throw new Error("Cashier access required");
   const previous = snapshot.audit.find(a => a.detail.requestId === request.requestId);
-  if (previous) { if (JSON.stringify(previous.detail.request) !== JSON.stringify(request)) throw new Error("Collection reference already used"); return snapshot; }
+  if (previous) { if (previous.actor_id !== actor.id || JSON.stringify(previous.detail.request) !== JSON.stringify(request)) throw new Error("Collection reference already used"); return snapshot; }
   const next = structuredClone(snapshot), now = new Date().toISOString();
   let bills: DeskBill[];
-  if (request.action === "update_settlement" || request.action === "revoke_settlement") {
+  if (request.action === "revoke_settlement") {
     bills = next.bills.filter(b => b.settlement?.id === request.settlementId);
     if (!bills.length) throw new Error("Settlement not found");
-    if (request.action === "revoke_settlement" && actor.role !== "super_admin") throw new Error("Admin correction required");
-    for (const bill of bills) {
-      if (request.action === "revoke_settlement") bill.settlement!.revoked = true;
-      else for (const key of ["followup1", "followup2", "remarks"] as const) if (request.details[key] !== undefined) bill.settlement!.details[key] = request.details[key];
-    }
+    if (actor.role !== "super_admin") throw new Error("Admin correction required");
+    for (const bill of bills) { bill.settlement!.revoked = true; bill.settlement!.state = "revoked"; bill.settlement!.revision = (bill.settlement!.revision || 0) + 1; }
   } else {
     if (actor.role !== "cashier") throw new Error("Cashier role required");
     bills = request.entries.map(e => { const b = next.bills.find(b => b.id === e.billId); if (!b) throw new Error("Bill not found"); return b; });
-    const allowed = request.action === "collect_batch" ? sameCustomerBills(bills[0], next.bills) : sameVehicleBills(bills[0], next.bills);
-    if (bills.some(b => !allowed.includes(b) || !b.uploads?.confirmed_at || isSupportingNote(b) || b.amount_paise === null || !b.invoice_date || !b.invoice_reference?.trim())) throw new Error(request.action === "collect_batch" ? "Readable submitted bills for one customer required" : "Readable submitted bills for one customer and vehicle required");
-    const settlement: Settlement | undefined = request.action === "arrange" ? { id: request.requestId, number: Math.max(0, ...next.bills.map(b => b.settlement?.number ?? 0)) + 1, kind: request.kind!, details: request.details, revoked: false, created_at: now, recorded_by: actor.id } : undefined;
+    const allowed = sameCustomerBills(bills[0], next.bills);
+    if (bills.some(b => !allowed.includes(b) || !b.uploads?.confirmed_at || isSupportingNote(b) || b.amount_paise === null || !b.invoice_date || !b.invoice_reference?.trim())) throw new Error("Readable submitted bills for one customer required");
     for (const [index, bill] of bills.entries()) {
       const entry = request.entries[index];
-      if (settlement) {
-        if (bill.settlement && !bill.settlement.revoked) throw new Error("Correct the existing arrangement before replacing it");
-        const share = entry.customerSharePaise;
-        if (settlement.kind === "insurance" && (share === undefined || share > bill.amount_paise! || share < payerCollected(bill, next.payments, "customer") + entry.amountPaise || bill.amount_paise! - share < payerCollected(bill, next.payments, "insurer"))) throw new Error("Customer share must cover collections and fit the invoice total");
-        if (settlement.kind === "credit" && payerCollected(bill, next.payments, "insurer") > 0) throw new Error("Reverse insurer payments before changing to credit");
-        bill.settlement = structuredClone(settlement); bill.customer_share_paise = settlement.kind === "insurance" ? share : null;
-        bill.credit_limit_paise = settlement.kind === "credit" ? balance(bill, next.payments)! - entry.amountPaise : null;
-      }
+      if (!arrangementApproved(bill.settlement)) throw new Error("TL approval required");
       if (entry.amountPaise > payerBalance(bill, next.payments, request.payer)!) throw new Error("Collection exceeds the outstanding balance");
       if (!bill.settlement && entry.amountPaise !== payerBalance(bill, next.payments)) throw new Error("Use a credit form for part payment");
       if (next.bills.some(b => b.id !== bill.id && b.approval_status === "approved" && b.invoice_reference?.trim().toUpperCase() === bill.invoice_reference?.trim().toUpperCase())) throw new Error("This invoice has already been approved");
