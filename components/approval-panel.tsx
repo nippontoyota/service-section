@@ -17,7 +17,8 @@ export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = fa
   });
   const related = snapshot.bills.filter(b => s && !s.revoked ? b.settlement?.id === s.id : b.uploaded_by === actor.id && b.amount_paise !== null && !b.gate_completed && (!b.settlement || b.settlement.revoked) && (!collected(b, snapshot.payments) || b.settlement?.revoked) && customerKey(b) === customerKey(bill) && (b.id === bill.id || (vehicleKey(bill.vehicle_no_display) && vehicleKey(b.vehicle_no_display) === vehicleKey(bill.vehicle_no_display))));
   const [selected, setSelected] = useState<string[]>(s && !s.revoked ? related.map(b => b.id) : [bill.id]);
-  const [amounts, setAmounts] = useState<Record<string, string>>(Object.fromEntries((s?.proposal || []).map(e => [e.billId, String((s?.kind === 'insurance' ? e.insurerPaise || 0 : e.creditPaise || 0) / 100)])));
+  const [amounts, setAmounts] = useState<Record<string, string>>(Object.fromEntries((s?.proposal || []).map(e => [e.billId, String((s?.kind === 'insurance' ? (related.find(b => b.id === e.billId)?.amount_paise || 0) - (e.insurerPaise || 0) : e.creditPaise || 0) / 100)])));
+  const amountFor = (b: DeskBill) => amounts[b.id] ?? String((kind === 'insurance' ? Math.min(200000, b.amount_paise || 0) : balance(b, snapshot.payments) || 0) / 100);
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [followup, setFollowup] = useState({ contact: s?.details.contactPerson || '', note: '', promisedDate: '', nextDate: '' });
@@ -28,7 +29,11 @@ export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = fa
     setError('');
     try {
       const editing = ['save_request', 'approve_request'].includes(action);
-      const entries: ApprovalEntry[] = editing ? related.filter(b => selected.includes(b.id)).map(b => ({ billId: b.id, [kind === 'insurance' ? 'insurerPaise' : 'creditPaise']: rupees(amounts[b.id] ?? String((kind === 'credit' ? balance(b, snapshot.payments) || 0 : 0) / 100)) })) : [];
+      const entries: ApprovalEntry[] = editing ? related.filter(b => selected.includes(b.id)).map(b => {
+        const amount = rupees(amountFor(b));
+        if (amount > (b.amount_paise || 0)) throw new Error('Requested amount must fit invoice total');
+        return { billId: b.id, [kind === 'insurance' ? 'insurerPaise' : 'creditPaise']: kind === 'insurance' ? (b.amount_paise || 0) - amount : amount };
+      }) : [];
       const body = { action, target: bill.id, settlementId: s && !s.revoked ? s.id : undefined, revision: s && !s.revoked ? s.revision : undefined, kind, entries, details, reason, followup };
       const fingerprint = JSON.stringify(body);
       if (request.current.fingerprint !== fingerprint) request.current = { fingerprint, id: crypto.randomUUID() };
@@ -55,8 +60,8 @@ export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = fa
           <label>{kind === 'insurance' ? 'Expected insurer payment date' : 'Credit due date'}<input type="date" min={indiaDate()} value={details.dueDate || ''} disabled={busy} onChange={e => change('dueDate', e.target.value)}/></label>
         </div>
         <div className="sd-allocations">{related.map(b => <div className="sd-approval-invoice" key={b.id}><label><input type="checkbox" checked={selected.includes(b.id)} disabled={busy || Boolean(s && !s.revoked)} onChange={e => setSelected(v => e.target.checked ? [...v, b.id] : v.filter(id => id !== b.id))}/>{b.invoice_reference} · {money(b.amount_paise)}<small>{b.invoice_date} · Job {b.job_card_reference || '—'} · {b.vehicle_no_display}</small></label>
-          <label>{kind === 'insurance' ? 'Insurer pays (₹)' : 'Requested credit (₹)'}<input type="number" min="0" step="0.01" max={(b.amount_paise || 0) / 100} disabled={busy || !selected.includes(b.id)} value={amounts[b.id] ?? String((kind === 'credit' ? balance(b, snapshot.payments) || 0 : 0) / 100)} onChange={e => setAmounts(v => ({ ...v, [b.id]: e.target.value }))}/></label>
-          <small>{kind === 'insurance' ? 'Customer share' : 'Required at cashier'}: {money(Math.max(0, (kind === 'insurance' ? b.amount_paise || 0 : balance(b, snapshot.payments) || 0) - Math.round(Number(amounts[b.id] ?? (kind === 'credit' ? (balance(b, snapshot.payments) || 0) / 100 : 0)) * 100)))}</small>
+          <label>{kind === 'insurance' ? 'Customer pays (₹)' : 'Requested credit (₹)'}<input type="number" min="0" step="0.01" max={(b.amount_paise || 0) / 100} disabled={busy || !selected.includes(b.id)} value={amountFor(b)} onChange={e => setAmounts(v => ({ ...v, [b.id]: e.target.value }))}/></label>
+          <small>{kind === 'insurance' ? 'Insurer pays' : 'Required at cashier'}: {money(Math.max(0, (kind === 'insurance' ? b.amount_paise || 0 : balance(b, snapshot.payments) || 0) - Math.round(Number(amountFor(b)) * 100)))}</small>
         </div>)}</div>
         <label>Reason / remarks<textarea maxLength={1000} value={details.remarks || ''} disabled={busy} onChange={e => change('remarks', e.target.value)}/></label>
       </>
