@@ -518,3 +518,23 @@
 @media(max-width:600px) { .sd-tl-case { padding: 14px; gap: 12px; }.sd-tl-case .sd-actions { width: 100%; }.sd-tl-case-status { flex-basis: 100%; }.sd-cashier-summary .sd-form-details { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; } }
 .sd-print-only { display: none; }
 @media print { .sd-form-details.sd-print-only { display: grid; } }
+
+.sd-mobile-header { display: none; }
+.sd-mobile-drawer { display: none; }
+@media(max-width:760px) {
+  .sd-desktop-sidebar { display: none; }
+  .sd-mobile-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; position: sticky; top: 0; z-index: 20; padding: 12px 16px; border-bottom: 1px solid var(--sd-line); background: white; }
+  .sd-mobile-header > button { width: 44px; height: 44px; padding: 8px; color: var(--sd-ink); }
+  .sd-mobile-drawer[open] { display: flex; flex-direction: column; gap: 28px; position: fixed; inset: 0 auto 0 0; margin: 0; width: min(320px,86vw); max-width: none; height: 100dvh; max-height: none; padding: 24px 18px; border: 0; border-right: 1px solid var(--sd-line); border-radius: 0; overflow-y: auto; overscroll-behavior: contain; background: white; color: var(--sd-ink); }
+  .sd-mobile-drawer::backdrop { background: rgb(20 24 32 / 45%); }
+  .sd-mobile-drawer .sd-menu-close { position: absolute; right: 12px; top: 18px; width: 44px; height: 44px; padding: 8px; }
+  .sd-mobile-drawer > .sd-brand { padding-right: 40px; }
+  .sd-mobile-drawer > .sd-eyebrow { display: block; margin: 0; }
+  .sd-mobile-drawer nav { display: grid; gap: 8px; overflow: visible; margin: 0; }
+  .sd-mobile-drawer nav button { width: 100%; min-height: 46px; padding: 13px 12px; font-size: 13px; text-align: left; }
+  .sd-mobile-drawer .sd-sidebar-bottom { display: grid; gap: 10px; margin-top: auto; padding-top: 24px; }
+  .sd-mobile-drawer .sd-sidebar-bottom strong { font-size: 14px; }
+  .sd-mobile-drawer .sd-sidebar-bottom small { display: block; }
+  .sd-mobile-drawer .sd-sidebar-bottom button { margin-left: 0; }
+}
+@media print { .sd-mobile-header,.sd-mobile-drawer { display: none !important; } }

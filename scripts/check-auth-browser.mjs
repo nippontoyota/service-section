@@ -42,8 +42,9 @@ try {
  await page.getByRole('button',{name:'Upload bills',exact:true,includeHidden:true}).waitFor({state:'attached'});
  assert.equal(await page.evaluate(()=>sessionStorage.getItem('desk-sharing-batch:test-cashier')),null,'Retired advisor sharing queues must be cleared');
  await snapshotReply();
- await page.getByRole('button',{name:'Sign out',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).waitFor();
  await page.emulateMedia({reducedMotion:'reduce'});
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  logoutReply=null;await page.getByRole('button',{name:'Sign out',exact:true}).click();await ready(()=>logoutReply);
  const out=page.getByRole('dialog',{name:'Signing out…',exact:true});await out.waitFor();
  assert.equal(await out.locator('.sd-toyota-emblem').evaluate(el=>getComputedStyle(el).animationName),'none');

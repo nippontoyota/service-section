@@ -56,7 +56,7 @@ try {
  await page.getByLabel('Amount received now (₹)').fill('3000');await page.getByLabel('Mode of payment').selectOption('Cash');await page.getByRole('button',{name:/Record payment/}).click();
  await page.waitForFunction(()=>JSON.parse(localStorage.getItem('service-desk-finance-demo-v1')).payments.some(p=>p.payer==='insurer'));
  snapshot=await saved();assert.equal(snapshot.payments.filter(p=>p.bill_id===data.bills[2].id).reduce((s,p)=>s+p.amount_paise,0),500000);
- await close();await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:/Receivables/}).click();await page.screenshot({path:'output/settlement-checks/receivables-mobile.png',fullPage:true});
+ await close();await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('button',{name:/Receivables/}).click();await page.screenshot({path:'output/settlement-checks/receivables-mobile.png',fullPage:true});
  const link=base+'/g/test';const qr=await QRCode.toDataURL(link,{width:360,margin:4});
  const html=gatePassDocument({status:'Valid',id:'example',number:21,issuedAt:now,issuedBy:'Cashier',customerName:'Test Customer',vehicle:'KL01AB1234',expiresAt:new Date(Date.now()+86400000).toISOString(),documents:[{billId:'a',invoiceNumber:'TEST-1',invoiceDate:'2026-11-20',jobNumber:'RO-123',jobDate:'2026-11-18'},{billId:'b',invoiceNumber:'TEST-2',invoiceDate:'2026-11-20',jobNumber:'RO-124',jobDate:'2026-11-18'}]},qr,'test');
  await page.route('**/g/test',route=>route.fulfill({contentType:'text/html',body:html}));await page.goto(link);

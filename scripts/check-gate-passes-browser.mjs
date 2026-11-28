@@ -71,7 +71,7 @@ try{
  assert.equal(await page.getByRole('button',{name:'amc_note',exact:true}).count(),0);
  // A visit containing only no-collection notes can issue from Archive without collection.
  bills=notes;await page.reload();
- await page.getByRole('button',{name:/^Archive/}).click();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('button',{name:/^Archive/}).click();
  for(const note of notes){
   await page.getByRole('button',{name:note.invoice_reference,exact:true}).click();
   const dialog=page.getByRole('dialog', {name:/^Bill /});
@@ -121,7 +121,7 @@ try{
  const link=message.match(/http:\/\/127\.0\.0\.1:3131\/g\/[A-Za-z0-9_-]+/)[0],code=new URL(link).pathname.slice(3);
  assert.equal(sha(code),storedHash);
  const expiry=pass.expiresAt;await page.getByRole('button',{name:'Issue gate pass',exact:true}).click();await page.getByText(/Gate pass saved/).last().waitFor();assert.equal(pass.expiresAt,expiry);
- await page.getByRole('button',{name:'Close bill details'}).click();await page.getByRole('button',{name:/^Archive/}).click();await page.getByRole('button',{name:'GATE-TEST',exact:true}).click();await page.getByRole('button',{name:'Issue gate pass',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Close bill details'}).click();await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('button',{name:/^Archive/}).click();await page.getByRole('button',{name:'GATE-TEST',exact:true}).click();await page.getByRole('button',{name:'Issue gate pass',exact:true}).waitFor();
  const anonymous=await browser.newContext({viewport:{width:390,height:844}}), customer=await anonymous.newPage();
  const response=await customer.goto(link);assert.equal(response.status(),200);assert.match(response.headers()['cache-control'],/no-store/);assert.equal(response.headers()['referrer-policy'],'no-referrer');assert.match(response.headers()['x-robots-tag'],/noindex/);
  await customer.getByRole('img',{name:'Gate pass QR code'}).waitFor();await customer.getByRole('button',{name:'Print gate pass'}).waitFor();assert.match(await customer.locator('body').innerText(),/GP-000001/);assert.equal(confirms,0);
