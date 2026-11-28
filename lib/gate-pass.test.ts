@@ -21,3 +21,14 @@ test("unguessable reproducible pass codes store only a hash and reject altered l
  process.env.GATE_PASS_SIGNING_SECRET = "short";
  assert.throws(() => newGatePass(), /not configured/);
 });
+
+test("compact gate pass keeps linked documents, escapes customer text and places QR first", async () => {
+ const { gatePassDocument } = await import('./gate-pass-document');
+ const html = gatePassDocument({status:'Valid',id:'test-pass',number:7,vehicle:'KL01AB1234',customerName:'<script>bad</script>',issuedBy:'Test Cashier',documents:Array.from({length:4},(_,i)=>({billId:String(i),invoiceNumber:`INV-${i}`,invoiceDate:'2026-11-28',jobNumber:`RO-${i}`,jobDate:'2026-11-28'}))},'data:image/png;base64,test','test-nonce');
+ assert.ok(html.indexOf('<div class="qr">') < html.indexOf('<div class="customer">'));
+ assert.ok(html.includes('&lt;script&gt;bad&lt;/script&gt;'));
+ assert.ok(html.includes('INV-3') && html.includes('2 more linked invoices'));
+ assert.ok(html.includes('Security must verify online'));
+ const failed = gatePassDocument({status:'Invalid'},'', 'test-nonce', 'Verification unavailable');
+ assert.ok(!failed.includes('<img') && failed.includes('Verification unavailable'));
+});

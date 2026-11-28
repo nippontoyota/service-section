@@ -15,7 +15,7 @@ export async function GET(request: Request, context: { params: Promise<{ code: s
    const { data, error } = await createServiceClient().rpc("app_public_gate_pass", { pass_hash: hashBillCode(code) });
    if (error || !data) throw new Error();
    pass = data;
-   if (pass.id) qr = await QRCode.toDataURL(`${customerBillOrigin()}/g/${code}`, { width: 360, margin: 4, errorCorrectionLevel: "M" });
+   if (pass.id) qr = await QRCode.toDataURL(`${customerBillOrigin()}/g/${code}`, { width: 480, margin: 4, errorCorrectionLevel: "M" });
   }
   if (pass.status === "Invalid") status = 404;
  } catch { failure = "Unable to verify—retry"; status = 503; }

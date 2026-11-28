@@ -101,7 +101,7 @@ try{
  await page.getByLabel('Mode of payment').selectOption('Cash');
  let heldPayment;
  await page.route('**/api/desk', route => route.request().method() === 'POST' ? (heldPayment = route) : route.continue());
- await page.getByRole('button',{name:/Record payment/}).click();
+ await page.getByRole('button',{name:/Mark selected bills as paid/}).click();
  await page.locator('.sd-dialog .sd-operation-inline').filter({hasText:'Recording payment…'}).waitFor();
  assert.equal(await page.locator('.sd-operation[open]').count(),0,'Payment uses inline pending');
  await page.keyboard.press('Escape'); assert.equal(await page.locator('.sd-dialog[open]').count(),1,'Pending payment keeps details open');
@@ -125,6 +125,7 @@ try{
  const anonymous=await browser.newContext({viewport:{width:390,height:844}}), customer=await anonymous.newPage();
  const response=await customer.goto(link);assert.equal(response.status(),200);assert.match(response.headers()['cache-control'],/no-store/);assert.equal(response.headers()['referrer-policy'],'no-referrer');assert.match(response.headers()['x-robots-tag'],/noindex/);
  await customer.getByRole('img',{name:'Gate pass QR code'}).waitFor();await customer.getByRole('button',{name:'Print gate pass'}).waitFor();assert.match(await customer.locator('body').innerText(),/GP-000001/);assert.equal(confirms,0);
+ const qrBox=await customer.getByRole('img',{name:'Gate pass QR code'}).boundingBox();assert.ok(qrBox.width>=200 && Math.abs(qrBox.x+qrBox.width/2-195)<=2,'large centred QR');assert.ok(await customer.evaluate(()=>document.documentElement.scrollHeight<=innerHeight),'gate pass fits one mobile view');
  // Decode the actual locally generated QR with the same scanner package used by the UI.
  await customer.route('**/test-qr/**',route=>{const file=route.request().url().endsWith('worker.min.js')?'qr-scanner-worker.min.js':'qr-scanner.min.js';return route.fulfill({contentType:'text/javascript',body:readFileSync('node_modules/qr-scanner/'+file)});});
  const dataUrl=await customer.getByRole('img').getAttribute('src');
