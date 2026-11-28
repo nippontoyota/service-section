@@ -16,7 +16,7 @@ import { readApiResponse } from "@/lib/api-response";
 import { OperationDialog, OperationStatus, useOperation } from "./operation-feedback";
 import { boundedRequest, requestJson, RequestTimeoutError } from "@/lib/operation";
 import { cashierRows, demoSettlement, normalizeSettlementRequest, releaseCleared, settlementStatus, submittedDay, sameVehicleBills } from "@/lib/settlement";
-import { ApprovalPanel, TeamLeaderWorkspace } from "./approval-panel";
+import { ApprovalPanel, PaymentRoutePicker, TeamLeaderWorkspace } from "./approval-panel";
 import { approvalActions, demoApproval, normalizeApprovalRequest, validateApproval, cashierAccessible } from "@/lib/approval";
 import { SettlementPanel } from "./settlement-panel";
 import "./service-desk.css";
@@ -75,6 +75,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   const [gateDocuments, setGateDocuments] = useState<Record<string, { jobNumber: string; jobDate: string }>>({});
   const [gatePages, setGatePages] = useState<Record<string, string>>({});
   const [gateLinks, setGateLinks] = useState<Record<string, string>>({});
+  const [paymentForm, setPaymentForm] = useState<{ billId: string; kind: "insurance" | "credit" } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
   const [files, setFiles] = useState<UploadFile[]>(() => initial?.profile.role === "service_advisor" && initial.snapshot ? restoreDrafts(initial.snapshot) : []);
@@ -96,7 +97,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
     links.current.clear();
     for (const url of localUrls.current.values()) URL.revokeObjectURL(url);
     localUrls.current.clear();
-    setPdfUrl(""); setPdfError(""); setPdfLoading(false);
+    setPdfUrl(""); setPdfError(""); setPdfLoading(false); setPaymentForm(null);
   }, []);
   const acceptSnapshot = useCallback((snapshot: Snapshot, user: Staff | null) => {
     setData(snapshot); setProfile(user); setRestoring(false); setRefreshError("");
@@ -534,6 +535,11 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       setNotice(warning || "Draft bill deleted.");
     }, "Deleting draft…", "Draft deleted");
   }
+  function choosePaymentRoute(bill: DeskBill, route: "ordinary" | "insurance" | "credit") {
+    if (busy || batchBusy || needsRefresh) return;
+    if (route === "ordinary") void action({ action: "set_bill_route", target: bill.id, requestId: crypto.randomUUID() });
+    else setPaymentForm({ billId: bill.id, kind: route });
+  }
   function selectBill(id: string | null) {
     pdfRequest.current++; setSelectedId(id); setPdfUrl(""); setPdfLoading(false); setPdfError("");
   }
@@ -611,6 +617,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
   const visible: Snapshot = profile.role === "service_advisor" ? { ...data, bills: data.bills.filter(b => b.uploaded_by === profile.id) } : data;
   const summary = report(visible, advisor);
   const daily = profile.role === "cashier" ? cashierDailyReport(visible, analyticsDay) : null;
+  const paymentBill = paymentForm ? data.bills.find(b => b.id === paymentForm.billId) ?? preview.find(b => b.id === paymentForm.billId) : undefined;
   const selected = data.bills.find(b => b.id === selectedId) ?? preview.find(b => b.id === selectedId);
   const person = (id: string | null) => data.staff.find(p => p.id === id)?.full_name ?? (id ? "Staff member" : "Deleted staff account");
   const billState = (b: DeskBill) => !b.uploads?.confirmed_at ? "Draft" : settlementStatus(b, data.payments);
@@ -687,7 +694,7 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
           <div className="sd-review-heading"><div><small>Invoice</small><h3 className="sd-review-reference">{b.invoice_reference || "Invoice number not read"}</h3></div><div className="sd-review-amount"><small>Bill amount</small><strong>{billAmount(b)}</strong></div></div>
           <div className="sd-review-customer"><small>Customer</small><strong>{b.customer_name || "Customer not read"}</strong></div>
           <dl className="sd-review-fields"><div><dt>Vehicle</dt><dd>{b.vehicle_no_display || "Vehicle not read"}</dd></div><div><dt>Invoice date</dt><dd>{b.invoice_date || "Date not read"}</dd></div></dl>
-          <button className="sd-secondary" disabled={busy || batchBusy} onClick={() => selectBill(b.id)}>{b.payment_route ? "Review " + b.payment_route + " details" : "Choose payment route"}</button>
+          {!isSupportingNote(b) && <PaymentRoutePicker bill={b} busy={busy || batchBusy || needsRefresh} onChoose={route => choosePaymentRoute(b, route)}/>}
           <label>Token number (optional)<input value={tokens[b.id] ?? b.token_number ?? ""} onChange={e => setTokens(current => ({ ...current, [b.id]: e.target.value }))} maxLength={30} placeholder="Enter token from your token machine" disabled={batchBusy || busy}/></label>
           <small className="sd-review-evidence">{b.amount_evidence}</small>
           {b.extraction_issues.map(issue => <p className="sd-warning" key={issue}>{issue}</p>)}
@@ -711,7 +718,8 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
         {profile.role === "service_advisor" && selected.uploaded_by === profile.id && !selected.uploads?.confirmed_at && selected.approval_status === "pending" && <button className="sd-danger" disabled={busy || batchBusy} onClick={() => void deleteBill(selected)}><Trash2 size={16}/>Delete bill</button>}
         {!demo && profile.role === "super_admin" && selected.approval_status === "pending" && selected.amount_paise === null && !isSupportingNote(selected) && <button disabled={busy} onClick={() => void action({action:"reextract",target:selected.id})}>Re-read original PDF</button>}
       </div>
-      {!isSupportingNote(selected) && <ApprovalPanel key={selected.id + ":" + (selected.settlement?.revision || 0) + ":" + (selected.payment_route || "")} bill={selected} snapshot={{ ...data, bills: [...new Map([...preview, ...data.bills].map(b => [b.id, b])).values()] }} actor={profile} busy={busy || needsRefresh} onSubmit={action} demo={demo}/>}
+      {!isSupportingNote(selected) && profile.role === "service_advisor" && <PaymentRoutePicker bill={selected} busy={busy || batchBusy || needsRefresh} onChoose={route => choosePaymentRoute(selected, route)}/>}
+      {!isSupportingNote(selected) && profile.role !== "service_advisor" && <ApprovalPanel key={selected.id + ":" + (selected.settlement?.revision || 0) + ":" + (selected.payment_route || "")} bill={selected} snapshot={{ ...data, bills: [...new Map([...preview, ...data.bills].map(b => [b.id, b])).values()] }} actor={profile} busy={busy || needsRefresh} onSubmit={action} demo={demo}/>}
       {["cashier", "super_admin"].includes(profile.role) && selected.uploads?.confirmed_at && !isSupportingNote(selected) && <SettlementPanel key={selected.id} bill={selected} snapshot={data} actor={profile} busy={busy || needsRefresh} onSubmit={action} onOpenBill={selectBill}/>}
       {profile.role === "cashier" && cashierAccessible(selected) && selected.amount_paise === 0 && !isPaid(selected, data.payments) && <button disabled={busy} onClick={() => void action({ action: "collect", target: selected.id, method: "Cash" })}>Clear zero-value invoice</button>}
       {profile.role === "cashier" && selected.uploads?.confirmed_at && !selected.gate_completed && releaseCleared(selected, data.payments) && <section className="sd-related"><h3>Vehicle gate pass</h3><p>All submitted bills for this customer and vehicle must be paid or covered by a recorded release arrangement.</p>{sameVehicleBills(selected, data.bills).filter(b => !b.gate_completed).map(b => <div className="sd-gate-fields" key={b.id}><label>R.O./W.O. No. · {b.invoice_reference}<input maxLength={100} disabled={busy} value={gateDocuments[b.id]?.jobNumber ?? b.job_card_reference ?? ""} onChange={e => setGateDocuments(current => ({ ...current, [b.id]: { jobNumber: e.target.value, jobDate: current[b.id]?.jobDate || "" } }))}/></label><label>R.O./W.O. date<input type="date" disabled={busy} value={gateDocuments[b.id]?.jobDate || ""} onChange={e => setGateDocuments(current => ({ ...current, [b.id]: { jobNumber: current[b.id]?.jobNumber ?? b.job_card_reference ?? "", jobDate: e.target.value } }))}/></label></div>)}<label><span className="sd-whatsapp-label"><WhatsAppIcon/>Customer WhatsApp number</span><input type="tel" autoComplete="off" placeholder="Enter customer WhatsApp number" maxLength={40} disabled={busy} value={phoneFor(selected)} onChange={e => { setPhones(current => ({ ...current, [selected.id]: e.target.value })); setGateLinks(current => ({ ...current, [selected.id]: "" })); }}/></label><div className="sd-actions"><button className="sd-primary" disabled={demo || busy} onClick={() => issueGatePass(selected)}><WhatsAppIcon/>Issue gate pass</button>{gatePages[selected.id] && <a className="sd-secondary" href={gatePages[selected.id]} target="_blank" rel="noreferrer">View / print gate pass</a>}{gateLinks[selected.id] && <a className="sd-whatsapp-action" href={gateLinks[selected.id]} target="_blank" rel="noreferrer" aria-label="Open gate pass in WhatsApp"><WhatsAppIcon/></a>}</div></section>}
@@ -724,6 +732,11 @@ export function ServiceDesk({ demo, ready, initial, initialError = "" }: { demo:
       {(needsRefresh || refreshError) && <button disabled={busy} onClick={() => void perform(refreshStatus)}>Refresh status</button>}
       {notice && <p className="sd-alert" role="status">{notice.includes("WhatsApp") && <WhatsAppIcon/>}{notice}</p>}
     </BillDialog>}
+    {paymentForm && paymentBill && profile.role === "service_advisor" && <DeskDialog title={paymentForm.kind === "insurance" ? "Insurer form" : "Credit form – service"} label={paymentForm.kind === "insurance" ? "Insurer form" : "Credit form – service"} closeLabel="Close payment form" onClose={() => { if (!feedback.lock.current) setPaymentForm(null); }}>
+      <OperationStatus operation={feedback.operation}/>
+      <ApprovalPanel key={paymentBill.id + ":" + paymentForm.kind + ":" + (paymentBill.settlement?.revision || 0)} bill={paymentBill} snapshot={{ ...data, bills: [...new Map([...preview, ...data.bills].map(b => [b.id, b])).values()] }} actor={profile} busy={busy || needsRefresh} onSubmit={action} demo={demo} initialKind={paymentForm.kind} formOnly onSaved={() => setPaymentForm(null)}/>
+      {notice && <p role="status" className="sd-notice">{notice}</p>}
+    </DeskDialog>}
   </div>;
 }
 

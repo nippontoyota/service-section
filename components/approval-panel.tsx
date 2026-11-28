@@ -6,13 +6,14 @@ import { payerBalance, rupees, vehicleKey, type SettlementDetails } from '@/lib/
 
 type Submit = (body: { action: string; [key: string]: unknown }) => Promise<boolean | undefined>;
 const dateTime = (value: string) => new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = false }: { bill: DeskBill; snapshot: Snapshot; actor: Staff; busy: boolean; onSubmit: Submit; demo?: boolean }) {
+export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = false, initialKind, formOnly = false, onSaved }: { bill: DeskBill; snapshot: Snapshot; actor: Staff; busy: boolean; onSubmit: Submit; demo?: boolean; initialKind?: 'insurance' | 'credit'; formOnly?: boolean; onSaved?: () => void }) {
   const s = bill.settlement, state = s ? approvalState(s) : undefined;
-  const [kind, setKind] = useState<'ordinary' | 'insurance' | 'credit'>(s?.kind || bill.payment_route || 'ordinary');
-  const [details, setDetails] = useState<SettlementDetails>(s?.details || {
+  const kind = initialKind || s?.kind || bill.payment_route || 'ordinary';
+  const [details, setDetails] = useState<SettlementDetails>({
     responsibleStaffId: actor.id, responsibleStaff: actor.full_name,
-    contactPerson: bill.customer_name, contactNumber: bill.customer_phone || bill.field_confidence?.document?.customerPhone || '',
+    contactPerson: kind === 'insurance' ? '' : bill.customer_name, contactNumber: kind === 'insurance' ? '' : bill.customer_phone || bill.field_confidence?.document?.customerPhone || '',
     insurer: /insur|assurance/i.test(bill.field_confidence?.document?.billedTo || '') ? bill.field_confidence?.document?.billedTo : '',
+    ...s?.details,
   });
   const related = snapshot.bills.filter(b => s && !s.revoked ? b.settlement?.id === s.id : b.uploaded_by === actor.id && b.amount_paise !== null && !b.gate_completed && (!b.settlement || b.settlement.revoked) && (!collected(b, snapshot.payments) || b.settlement?.revoked) && customerKey(b) === customerKey(bill) && (b.id === bill.id || (vehicleKey(bill.vehicle_no_display) && vehicleKey(b.vehicle_no_display) === vehicleKey(bill.vehicle_no_display))));
   const [selected, setSelected] = useState<string[]>(s && !s.revoked ? related.map(b => b.id) : [bill.id]);
@@ -31,21 +32,20 @@ export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = fa
       const body = { action, target: bill.id, settlementId: s && !s.revoked ? s.id : undefined, revision: s && !s.revoked ? s.revision : undefined, kind, entries, details, reason, followup };
       const fingerprint = JSON.stringify(body);
       if (request.current.fingerprint !== fingerprint) request.current = { fingerprint, id: crypto.randomUUID() };
-      if (await onSubmit({ ...body, requestId: request.current.id })) { request.current = { fingerprint: '', id: '' }; setFollowup(f => ({ ...f, note: '' })); }
+      if (await onSubmit({ ...body, requestId: request.current.id })) { request.current = { fingerprint: '', id: '' }; setFollowup(f => ({ ...f, note: '' })); if (action === 'save_request' || action === 'submit_request') onSaved?.(); }
     } catch (e) { setError((e as Error).message); }
   }
-  if (!s && actor.role !== 'service_advisor') return null;
-  return <section className="sd-approval-sheet">
-    <header className="sd-section-heading"><div><span className="sd-eyebrow">{s ? `REQUEST ${String(s.number).padStart(5, '0')}` : 'PAYMENT ROUTE'}</span><h3>{s?.kind === 'insurance' ? 'Insurance approval' : s?.kind === 'credit' ? 'Credit form – service' : 'How will this bill be paid?'}</h3></div>{s && <span className="sd-status">{state?.replaceAll('_', ' ')}</span>}</header>
+  if (kind === 'ordinary' || (!s && actor.role !== 'service_advisor')) return null;
+  return <section className={"sd-approval-sheet" + (formOnly ? " sd-approval-form-only" : "")}>
+    <header className="sd-section-heading"><div><span className="sd-eyebrow">{s ? `REQUEST ${String(s.number).padStart(5, '0')}` : 'PAYMENT ROUTE'}</span><h3>{kind === 'insurance' ? 'Insurance approval' : 'Credit form – service'}</h3></div>{s && <span className="sd-status">{state?.replaceAll('_', ' ')}</span>}</header>
     {s?.approved_name && <div className={'sd-verified-stamp' + (s.revoked ? ' is-revoked' : '')}><strong>{s.revoked ? 'APPROVAL REVOKED' : 'VERIFIED'}</strong><span>Signed by {s.approved_name}</span><small>Team Leader · {dateTime(s.approved_at!)} · Request {String(s.number).padStart(5, '0')}</small></div>}
     {state === 'legacy_approved' && <p className="sd-muted">Legacy approval retained. No Team Leader signature was recorded.</p>}
     {state === 'pending' && <p className="sd-alert">Awaiting the branch Team Leader. Cashier collection and release are blocked.</p>}
     {state === 'returned' && <p className="sd-warning">Returned: {s?.return_reason}</p>}
     {!snapshot.staff.some(p => p.role === 'team_leader' && p.active && !p.must_change_password) && actor.role === 'service_advisor' && <p className="sd-warning">The administrator must set up an active Team Leader. Requests will remain pending until then.</p>}
     <dl className="sd-form-details"><div><dt>Customer / ID</dt><dd>{bill.customer_name} · {bill.customer_reference || '—'}</dd></div><div><dt>Customer contact</dt><dd>{bill.customer_phone || bill.field_confidence?.document?.customerPhone || "Not recorded"}</dd></div><div><dt>Vehicle / VIN</dt><dd>{bill.vehicle_no_display} · {bill.vin || '—'}</dd></div><div><dt>Submitted by</dt><dd>{s?.advisor_name || snapshot.staff.find(p => p.id === bill.uploaded_by)?.full_name || actor.full_name}</dd></div><div><dt>Prepared</dt><dd>{s ? dateTime(s.created_at) : indiaDate()}</dd></div></dl>
-    {editable ? <form onSubmit={e => { e.preventDefault(); void send(actor.role === 'team_leader' ? 'approve_request' : kind === 'ordinary' ? 'set_bill_route' : 'save_request'); }}>
-      {!s && <label>Payment route<select value={kind} disabled={busy} onChange={e => { const value = e.target.value as typeof kind; setKind(value); setDetails(d => ({ ...d, contactPerson: value === 'insurance' ? '' : bill.customer_name, contactNumber: value === 'insurance' ? '' : bill.customer_phone || bill.field_confidence?.document?.customerPhone || '' })); }}><option value="ordinary">Ordinary full payment</option><option value="insurance">Insurance</option><option value="credit">Credit form – service</option></select></label>}
-      {kind !== 'ordinary' && <>
+    {editable ? <form onSubmit={e => { e.preventDefault(); void send(actor.role === 'team_leader' ? 'approve_request' : 'save_request'); }}>
+      <>
         <p>{actor.role === 'team_leader' ? 'Review and correct the terms below. Your approval records the final version.' : 'Save this form before submitting the upload. Amounts shown here are requests, not money received.'}</p>
         <div className="sd-settlement-fields">
           {kind === 'insurance' && <label>Insurer<input maxLength={200} value={details.insurer || ''} disabled={busy} onChange={e => change('insurer', e.target.value)}/></label>}
@@ -59,8 +59,8 @@ export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = fa
           <small>{kind === 'insurance' ? 'Customer share' : 'Required at cashier'}: {money(Math.max(0, (kind === 'insurance' ? b.amount_paise || 0 : balance(b, snapshot.payments) || 0) - Math.round(Number(amounts[b.id] ?? (kind === 'credit' ? (balance(b, snapshot.payments) || 0) / 100 : 0)) * 100)))}</small>
         </div>)}</div>
         <label>Reason / remarks<textarea maxLength={1000} value={details.remarks || ''} disabled={busy} onChange={e => change('remarks', e.target.value)}/></label>
-      </>}
-      <button className="sd-primary sd-no-print" disabled={busy || (kind !== 'ordinary' && !selected.length)}>{actor.role === 'team_leader' ? 'Approve final terms' : kind === 'ordinary' ? 'Save ordinary payment route' : 'Save request draft'}</button>
+      </>
+      <button className="sd-primary sd-no-print" disabled={busy || !selected.length}>{actor.role === 'team_leader' ? 'Approve final terms' : 'Save request draft'}</button>
     </form> : s && <>
       <dl className="sd-form-details">{[['Insurer', s.details.insurer], ['Contact person', s.details.contactPerson], ['Contact number', s.details.contactNumber], ['Responsible staff', s.details.responsibleStaff], ['Due date', s.details.dueDate], ['Remarks', s.details.remarks]].filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
       <div className="sd-table-wrap"><table><thead><tr><th>Invoice / job / date</th><th>Total</th><th>{s.kind === 'insurance' ? 'Insurer pays' : 'Credit allowed'}</th><th>Outstanding</th></tr></thead><tbody>{related.map(b => <tr key={b.id}><td>{b.invoice_reference}<small>{b.job_card_reference || '—'} · {b.invoice_date}</small></td><td>{money(b.amount_paise)}</td><td>{money(s.proposal?.find(e => e.billId === b.id)?.[s.kind === 'insurance' ? 'insurerPaise' : 'creditPaise'] ?? (s.kind === 'insurance' ? (b.amount_paise || 0) - (b.customer_share_paise || 0) : b.credit_limit_paise || 0))}</td><td>{money(balance(b, snapshot.payments))}</td></tr>)}</tbody></table></div>
@@ -68,13 +68,28 @@ export function ApprovalPanel({ bill, snapshot, actor, busy, onSubmit, demo = fa
     {actor.role === 'service_advisor' && s && ['draft', 'returned'].includes(state!) && related.every(b => b.uploads?.confirmed_at) && <button disabled={busy} className="sd-primary sd-no-print" onClick={() => void send('submit_request')}>Submit saved draft to TL</button>}
     {actor.role === 'team_leader' && state === 'pending' && <div className="sd-no-print"><label>Return reason<textarea maxLength={1000} disabled={busy} value={reason} onChange={e => setReason(e.target.value)}/></label><button disabled={busy || !reason.trim()} onClick={() => void send('return_request')}>Return to advisor</button></div>}
     {actor.role === 'cashier' && state === 'approved' && !s?.acknowledged_at && <button className="sd-primary sd-no-print" disabled={busy} onClick={() => void send('acknowledge_request')}>Accept TL-approved terms</button>}
-    {s && <div className="sd-actions sd-no-print"><button onClick={() => window.print()}>Print form</button>{s.kind === 'insurance' && s.approved_name && !demo && <a className="sd-secondary" target="_blank" rel="noreferrer" href={`/api/bills/${bill.id}/approved-pdf`}>View stamped insurer bill PDF</a>}{actor.role === 'super_admin' && !s.revoked && <button className="sd-danger" disabled={busy} onClick={() => { const reason = window.prompt('Reason for revoking this approval'); if (reason?.trim()) void onSubmit({ action: 'revoke_settlement', requestId: crypto.randomUUID(), settlementId: s.id, entries: [], payer: 'customer', details: { remarks: reason } }); }}>Revoke approval</button>}</div>}
-    {s && <section className="sd-followups"><h4>Payment follow-up</h4><p>{s.kind === 'insurance' ? 'Insurer' : 'Customer'} outstanding: <strong>{money(related.reduce((sum, b) => sum + (payerBalance(b, snapshot.payments, s.kind === 'insurance' ? 'insurer' : 'customer') || 0), 0))}</strong></p>
+    {s && !formOnly && <div className="sd-actions sd-no-print"><button onClick={() => window.print()}>Print form</button>{s.kind === 'insurance' && s.approved_name && !demo && <a className="sd-secondary" target="_blank" rel="noreferrer" href={`/api/bills/${bill.id}/approved-pdf`}>View stamped insurer bill PDF</a>}{actor.role === 'super_admin' && !s.revoked && <button className="sd-danger" disabled={busy} onClick={() => { const reason = window.prompt('Reason for revoking this approval'); if (reason?.trim()) void onSubmit({ action: 'revoke_settlement', requestId: crypto.randomUUID(), settlementId: s.id, entries: [], payer: 'customer', details: { remarks: reason } }); }}>Revoke approval</button>}</div>}
+    {s && !formOnly && <section className="sd-followups"><h4>Payment follow-up</h4><p>{s.kind === 'insurance' ? 'Insurer' : 'Customer'} outstanding: <strong>{money(related.reduce((sum, b) => sum + (payerBalance(b, snapshot.payments, s.kind === 'insurance' ? 'insurer' : 'customer') || 0), 0))}</strong></p>
       {(s.followups || []).map(f => <article className="sd-audit-row" key={f.id}><div><strong>{f.contact} · {f.actorName}</strong><p>{f.note}</p><small>{dateTime(f.createdAt)}{f.promisedDate && ` · Promised ${f.promisedDate}`}{f.nextDate && ` · Next follow-up ${f.nextDate}`}</small></div></article>)}
       {actor.role === 'team_leader' && arrangementApproved(s) && <form className="sd-no-print" onSubmit={e => { e.preventDefault(); void send('add_followup'); }}><div className="sd-settlement-fields"><label>Person contacted<input required maxLength={200} disabled={busy} value={followup.contact} onChange={e => setFollowup(f => ({ ...f, contact: e.target.value }))}/></label><label>Promised payment date<input type="date" disabled={busy} value={followup.promisedDate} onChange={e => setFollowup(f => ({ ...f, promisedDate: e.target.value }))}/></label><label>Next follow-up<input type="date" disabled={busy} value={followup.nextDate} onChange={e => setFollowup(f => ({ ...f, nextDate: e.target.value }))}/></label></div><label>Follow-up note<textarea required maxLength={1000} disabled={busy} value={followup.note} onChange={e => setFollowup(f => ({ ...f, note: e.target.value }))}/></label><button disabled={busy}>Add follow-up</button></form>}
     </section>}
     {error && <p role="alert" className="sd-warning">{error}</p>}
   </section>;
+}
+
+export function PaymentRoutePicker({ bill, busy, onChoose }: { bill: DeskBill; busy: boolean; onChoose: (route: 'ordinary' | 'insurance' | 'credit') => void }) {
+  const activeRequest = bill.settlement && !bill.settlement.revoked;
+  const route = activeRequest ? bill.settlement!.kind : bill.payment_route || '';
+  return <div className="sd-payment-route-picker">
+    <label><span>Payment type</span><select aria-label={`Payment type for ${bill.invoice_reference || 'bill'}`} disabled={busy} value={route} onChange={e => { if (e.target.value) onChoose(e.target.value as 'ordinary' | 'insurance' | 'credit'); }}>
+      <option value="" disabled>Choose payment route</option>
+      <option value="ordinary" disabled={Boolean(activeRequest || bill.uploads?.confirmed_at)}>Cash / full payment</option>
+      <option value="insurance" disabled={Boolean(activeRequest && route !== 'insurance')}>Insurer</option>
+      <option value="credit" disabled={Boolean(activeRequest && route !== 'credit')}>Credit form – service</option>
+    </select></label>
+    {activeRequest && <button className="sd-secondary" type="button" disabled={busy} onClick={() => onChoose(bill.settlement!.kind)}>Open {route === 'insurance' ? 'insurer' : 'credit'} form</button>}
+    {route === 'ordinary' && <small>Saved · cashier collects payment</small>}
+  </div>;
 }
 
 export function TeamLeaderWorkspace({ snapshot, onSelect }: { snapshot: Snapshot; onSelect: (id: string) => void }) {
